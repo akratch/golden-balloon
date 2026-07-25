@@ -9,7 +9,8 @@
 
 <meta property="og:title" content="Golden Balloon">
 <meta property="og:description" content="A native source port of the 1997 N64 kart racer, running in your browser via WebGPU. Bring your own ROM.">
-<meta property="og:image" content="assets/og.jpg">
+<meta property="og:image" content="https://akratch.github.io/golden-balloon/assets/og.jpg">
+<meta property="og:url" content="https://akratch.github.io/golden-balloon/">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">
 
@@ -76,7 +77,7 @@
               </svg>
               <p class="drop-title">Drop your ROM here, or <span class="link">browse</span></p>
               <p id="drop-help" class="drop-sub">
-                <code>.z64</code> · <code>.v64</code> · <code>.n64</code> — exactly 12&nbsp;MB (US 1.1)
+                <code>.z64</code> · <code>.v64</code> · <code>.n64</code> — 12&nbsp;MB, <strong>US 1.1 or EU 1.1</strong>
               </p>
               <input type="file" id="rom-input" accept=".z64,.n64,.v64,.rom" hidden>
             </div>
@@ -89,6 +90,12 @@
               </button>
               <button id="forget" class="btn btn-ghost" hidden>Forget stored ROM</button>
             </div>
+
+            <p class="fine">
+              Other revisions (US 1.0, EU 1.0, Japan) are recognised and named back to
+              you, but not supported yet — this build is compiled for the 1.1 data and
+              nothing bounds-checks an index into a section that shrank.
+            </p>
 
             <p class="privacy">
               Your ROM is read <strong>locally, in this browser</strong>. It is never
@@ -148,6 +155,24 @@
           </div>
         </section>
 
+        <section class="sect" aria-labelledby="known-title">
+          <div class="pos" aria-hidden="true">03</div>
+          <div class="panel">
+            <h3 id="known-title">Known issues</h3>
+            <ul class="notes">
+              <li><strong>Boss races are incomplete.</strong> Reaching one is possible;
+                a fall-through on the volcano climb is being fixed.</li>
+              <li><strong>Adventure mode</strong> drives hub → race → hub, but winning a
+                race (the balloon cutscene) is not validated yet.</li>
+              <li><strong>Challenge modes and 3–4 player</strong> are not implemented.</li>
+              <li>Found something? A browser console trace is genuinely useful —
+                the wasm offsets in it map straight back to function names.
+                <a href="https://github.com/akratch/golden-balloon/issues">Open an
+                issue</a>.</li>
+            </ul>
+          </div>
+        </section>
+
         <hr class="rule" aria-hidden="true">
 
         <footer class="foot">
@@ -159,6 +184,11 @@
           <p class="fine">
             Game logic comes from the community decompilation. The engine layer,
             renderer and this web build are original work.
+          </p>
+          <p class="fine">
+            <a href="https://github.com/akratch/golden-balloon/blob/main/DISCLAIMER.md">Disclaimer</a> ·
+            <a href="https://github.com/akratch/golden-balloon/blob/main/LICENSE">License (MIT, our code only)</a> ·
+            <a href="https://github.com/akratch/golden-balloon">Source of this page</a>
           </p>
         </footer>
       </div>

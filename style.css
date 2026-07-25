@@ -314,3 +314,8 @@ kbd {
 }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* Links in body copy. The page had none until the known-issues block and the legal
+   line; without this they inherit the ink colour and read as plain text. */
+.notes a, .foot a { color: var(--gold); text-decoration: underline; }
+.notes a:hover, .foot a:hover { color: #ffd76a; }
