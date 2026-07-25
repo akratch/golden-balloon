@@ -1,11 +1,11 @@
-# 🎈 Golden Balloon — web demo
+# Golden Balloon — web demo
 
-**▶ Play: https://REPLACE-ME.github.io/golden-balloon-demo/**
+**▶ Play: https://akratch.github.io/golden-balloon/**
 
 A native source port of the 1997 Nintendo 64 kart racer, compiled to WebGPU and
 running entirely in your browser.
 
-> ### 🔑 Bring your own ROM
+> ### Bring your own ROM
 >
 > **This repository contains no ROM and no game assets** — no textures, audio,
 > music, models or level data, and none in its history. You supply a copy of the
@@ -21,6 +21,7 @@ A **publication target**, nothing more. It holds only built artifacts:
 | | |
 |---|---|
 | `mdkr64_web.wasm` / `.js` | the compiled engine |
+| `mdkr64_web.js.symbols` | the symbol map from that exact link, so a crash trace can be read |
 | `index.html`, `style.css`, `mdkr64-shell.js` | the launcher shell |
 | `assets/` | project brand art |
 | `build-info.json` | which source commit produced this build |
@@ -28,7 +29,7 @@ A **publication target**, nothing more. It holds only built artifacts:
 **There is no source code here** — no decompiled game code, no engine source. The
 development repository is separate and private.
 
-## ⚠️ Do not send pull requests here
+## Do not send pull requests here
 
 This repo is generated. Its contents are overwritten wholesale on every publish, so
 any change made here is silently lost. Issues about *gameplay* are welcome; code
