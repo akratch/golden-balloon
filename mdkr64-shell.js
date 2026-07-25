@@ -151,9 +151,24 @@ async function boot() {
   }
 
   status.textContent = "Starting engine…";
+
+  // ?trace=1 turns on the engine's own [PACE] trace, which prints the real
+  // per-frame time (dtms) and the updateRate the game is using (R=). That is the
+  // decisive diagnostic for "is the game running too fast?" -- a healthy 60 Hz run
+  // shows dtms~16.7 with R=1. ?trace=2 adds the display-list opcode trace.
+  const qs = new URLSearchParams(location.search);
+  const traceLevel = qs.get("trace");
+
   module = await createMDKR64({
     canvas,
     noInitialRun: true,
+    // preRun runs BEFORE the createMDKR64 promise resolves, so `module` is still
+    // null here — take the Module from the callback argument instead.
+    preRun: [function (m) {
+      if (traceLevel && m && m.ENV) {
+        try { m.ENV.MDKR_TRACE = String(traceLevel); } catch (e) {}
+      }
+    }],
     printErr: (t) => console.error(t),
     onExit: (code) => {
       // The engine's main() returns nonzero when rom_io.c refuses the ROM.
@@ -299,6 +314,35 @@ function wireRomUi() {
   });
 }
 
+// ---- Frame-rate readout ----------------------------------------------------
+// The engine suspends to requestAnimationFrame once per frame, so counting rAF
+// callbacks measures the ENGINE's frame rate, not just the display refresh. If this
+// reads ~120 on a 120 Hz panel while the game feels double speed, the pacing floor
+// is not holding; if it reads ~60 and the game still feels fast, the problem is
+// upstream of pacing. Toggle with F3.
+function wireFpsReadout() {
+  const el = $("fps");
+  if (!el) return;
+  let frames = 0, since = performance.now(), shown = false;
+  const rawRAF = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = function (cb) {
+    frames++;
+    return rawRAF(cb);
+  };
+  setInterval(() => {
+    const now = performance.now();
+    const dt = now - since;
+    if (dt >= 500) {
+      const fps = (frames * 1000) / dt;
+      el.textContent = fps.toFixed(0) + " fps  ·  " + (1000 / Math.max(fps, 0.001)).toFixed(1) + " ms";
+      frames = 0; since = now;
+    }
+  }, 500);
+  addEventListener("keydown", (e) => {
+    if (e.key === "F3") { shown = !shown; el.hidden = !shown; }
+  });
+}
+
 // ---- Fullscreen ------------------------------------------------------------
 function wireFullscreen() {
   const btn = $("fullscreen");
@@ -322,6 +366,7 @@ function wireFullscreen() {
 (async () => {
   wireRomUi();
   wireFullscreen();
+  wireFpsReadout();
 
   // ALWAYS reveal the launcher UI. It used to be hidden behind the WebGPU gate,
   // which meant a browser without a usable adapter showed nothing but an error
