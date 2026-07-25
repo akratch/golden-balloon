@@ -1,8 +1,10 @@
 // mdkr64-shell.js — browser launcher for the mdkr64 WebGPU/wasm engine.
 //
-// Flow: feature-detect WebGPU -> let the user pick their .z64 -> instantiate the
-// wasm module -> mount IDBFS at /rom (ROM persists across reloads) and /save
-// (EEPROM persists) -> write the ROM into MEMFS/IDBFS -> callMain(--rom ...).
+// Flow: feature-detect WebGPU -> let the user pick their .z64 (validated and
+// byte-order-normalised by rom-id.js, which index.html loads first) ->
+// instantiate the wasm module -> mount IDBFS at /rom (ROM persists across
+// reloads) and /save (EEPROM persists) -> write the ROM into MEMFS/IDBFS ->
+// callMain(--rom ...).
 // The engine reads the whole ROM at boot (rom_io.c) and drives its own frame
 // loop, suspending to requestAnimationFrame via Asyncify at each frame boundary.
 //
@@ -11,8 +13,10 @@
 
 "use strict";
 
+// The ROM is always written here in canonical .z64 order — validateRom() below
+// converts a .v64/.n64 pick in place before it is persisted, so the name is
+// accurate rather than aspirational. Size and revision live in rom-id.js.
 const ROM_PATH = "/rom/baserom.us.v80.z64";
-const ROM_SIZE = 12 * 1024 * 1024; // DKR US 1.1 = 0xC00000 bytes
 const $ = (id) => document.getElementById(id);
 
 let romBytes = null;     // freshly-picked ROM bytes (null once written to FS)
@@ -38,18 +42,28 @@ async function gate() {
   return null;
 }
 
-// ---- Client-side ROM sanity check (mirrors rom_io.c) -----------------------
-// Accepts .z64 (80 37 12 40), byteswapped .v64 (37 80..), or .n64 (40 12..).
-function validateRom(bytes) {
-  if (!bytes || bytes.length !== ROM_SIZE) {
-    return `That file is ${bytes ? (bytes.length / 1048576).toFixed(1) : 0} MB; the ROM must be exactly 12 MB (US 1.1 .z64).`;
+// ---- Client-side ROM check -------------------------------------------------
+// The whole gate lives in rom-id.js, which is the browser mirror of
+// platform/rom_id.c: size -> byte order (converted IN PLACE to .z64 here, so the
+// copy persisted to IDBFS is canonical) -> which DKR revision this actually is.
+//
+// It used to be size + magic only. That accepted .v64/.n64 without converting
+// anything (the engine converted, so it worked, but this side did not know it)
+// and — the real hole — accepted EVERY DKR revision, because all five are 12 MB
+// with the same magic. A European or Japanese cart passed and booted into
+// garbage. rom-id.js says exactly which revision it is instead.
+//
+// Returns an error string to show the user, or null to accept. Mutates `bytes`
+// into .z64 order on success.
+function validateRom(bytes, name) {
+  if (typeof dkrValidateRom !== "function") {
+    return "rom-id.js failed to load, so this page cannot check your ROM. Reload the page.";
   }
-  const b0 = bytes[0], b1 = bytes[1], b2 = bytes[2], b3 = bytes[3];
-  const z64 = b0 === 0x80 && b1 === 0x37 && b2 === 0x12 && b3 === 0x40;
-  const v64 = b0 === 0x37 && b1 === 0x80 && b2 === 0x40 && b3 === 0x12;
-  const n64 = b0 === 0x40 && b1 === 0x12 && b2 === 0x37 && b3 === 0x80;
-  if (!z64 && !v64 && !n64) {
-    return "That file isn't an N64 ROM (bad header). Expected a Diddy Kong Racing .z64/.v64/.n64 dump.";
+  const res = dkrValidateRom(bytes, name);
+  if (res.error) return res.error;
+  if (res.warning) console.warn("[ROM] " + res.warning);
+  if (res.order && res.order !== "z64") {
+    console.info(`[ROM] .${res.order} image converted to big-endian .z64 order.`);
   }
   return null;
 }
@@ -243,7 +257,7 @@ function wireRomUi() {
       romStatus.textContent = "Couldn't read that file (" + (e.message || e) + ").";
       return;
     }
-    const err = validateRom(buf);
+    const err = validateRom(buf, file.name);
     if (err) {
       romStatus.className = "err";
       romStatus.textContent = err;

@@ -181,6 +181,9 @@
   Couldn't save to browser storage — progress may not persist.
 </div>
 
+<!-- rom-id.js MUST come first: the shell calls dkrValidateRom() from it. It is the
+     browser mirror of platform/rom_id.c (revision table + byte-order fix-up). -->
+<script src="rom-id.js"></script>
 <script src="mdkr64-shell.js"></script>
 </body>
 </html>
