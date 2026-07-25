@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Golden Balloon — play in your browser</title>
+<meta name="description" content="A native source port of the 1997 N64 kart racer, compiled to WebGPU and running entirely in your browser. Bring your own ROM.">
+
+<meta property="og:title" content="Golden Balloon">
+<meta property="og:description" content="A native source port of the 1997 N64 kart racer, running in your browser via WebGPU. Bring your own ROM.">
+<meta property="og:image" content="assets/og.jpg">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+
+<link rel="icon" type="image/png" href="assets/favicon.png">
+<link rel="preload" as="image" href="assets/logo.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ================= LAUNCHER ================= -->
+<main id="gate">
+  <div class="sky" aria-hidden="true"></div>
+
+  <div class="wrap">
+
+    <header class="hero">
+      <img class="logo" src="assets/logo.png"
+           alt="Golden Balloon" width="900" height="325">
+      <p class="tagline">
+        A native source port of the 1997&nbsp;N64 kart racer — compiled to
+        <strong>WebGPU</strong> and running entirely in this tab.
+      </p>
+      <p class="eyebrow"><span class="dot" aria-hidden="true"></span>No install · no server · no game data shipped</p>
+    </header>
+
+    <!-- Capability gate, boot progress and errors all land here. -->
+    <p id="gate-msg" class="status-line" role="status" aria-live="polite">Checking your browser…</p>
+    <noscript>
+      <p class="status-line err">This page needs JavaScript to download and run the WebGPU engine.</p>
+    </noscript>
+
+    <!-- Revealed once the WebGPU capability gate passes. -->
+    <div id="rom-ui" hidden>
+
+      <section class="card" aria-labelledby="picker-title">
+        <h2 id="picker-title">Load your ROM to play</h2>
+
+        <div id="drop" class="drop" tabindex="0" role="button"
+             aria-describedby="drop-help">
+          <svg class="drop-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 16V4m0 0L8 8m4-4 4 4M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"
+                  fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <p class="drop-title">Drop your ROM here, or <span class="link">browse</span></p>
+          <p id="drop-help" class="drop-sub">
+            <code>.z64</code> · <code>.v64</code> · <code>.n64</code> — exactly 12&nbsp;MB (US 1.1)
+          </p>
+          <input type="file" id="rom-input" accept=".z64,.n64,.v64,.rom" hidden>
+        </div>
+
+        <p id="rom-status" class="rom-status" role="status" aria-live="polite"></p>
+
+        <div class="actions">
+          <button id="play" class="btn btn-primary" disabled>
+            <span aria-hidden="true">▶</span> Play
+          </button>
+          <button id="forget" class="btn btn-ghost" hidden>Forget stored ROM</button>
+        </div>
+
+        <p class="privacy">
+          🔒 Your ROM is read <strong>locally in this browser</strong>. It is never
+          uploaded — there is no server to receive it. No game data is distributed
+          with this page; you supply your own copy.
+        </p>
+      </section>
+
+      <div class="cols">
+        <section class="card compact">
+          <h3>Controls</h3>
+          <dl class="keys">
+            <dt><kbd>←</kbd><kbd>→</kbd> <span class="alt">/ <kbd>A</kbd><kbd>D</kbd></span></dt>
+              <dd>Steer</dd>
+            <dt><kbd>↑</kbd><kbd>↓</kbd> <span class="alt">/ <kbd>W</kbd><kbd>S</kbd></span></dt>
+              <dd>Menus · plane pitch</dd>
+            <dt><kbd>X</kbd></dt><dd><strong>Accelerate</strong> (A)</dd>
+            <dt><kbd>Z</kbd></dt><dd>Brake / reverse (B)</dd>
+            <dt><kbd>Space</kbd></dt><dd><strong>Hop / power-slide</strong> (R)</dd>
+            <dt><kbd>Shift</kbd></dt><dd>Fire item (Z)</dd>
+            <dt><kbd>Q</kbd></dt><dd>L</dd>
+            <dt><kbd>I</kbd><kbd>J</kbd><kbd>K</kbd><kbd>L</kbd></dt><dd>C-buttons · rear view</dd>
+            <dt><kbd>Enter</kbd></dt><dd>Start / pause</dd>
+            <dt><kbd>F</kbd></dt><dd>Fullscreen</dd>
+          </dl>
+          <p class="tip">
+            <strong>Space is worth learning.</strong> Tapping hop into a corner
+            power-slides, which is how you actually go fast in this game.
+          </p>
+          <p class="fine">
+            A gamepad is genuinely better here — keyboard steering is digital
+            (full lock or nothing), while the original is analog. Plug one in and
+            press a button; it's picked up automatically.
+          </p>
+        </section>
+
+        <section class="card compact">
+          <h3>Good to know</h3>
+          <ul class="notes">
+            <li><strong>Saves persist</strong> in your browser, so lap records
+              survive a reload.</li>
+            <li>Needs <strong>WebGPU</strong> — Chrome or Edge 113+. There's no
+              WebGL fallback, so this page tells you up front instead of running
+              black.</li>
+            <li>Adventure mode and one snow track are still in development.
+              <strong>Tracks</strong> and <strong>Time Trial</strong> are the solid
+              path today.</li>
+            <li>Two-player split-screen works with a second controller.</li>
+          </ul>
+        </section>
+      </div>
+
+      <footer class="foot">
+        <p>
+          Unofficial fan project for research and preservation. Not affiliated with
+          or endorsed by any rights holder; all trademarks belong to their owners.
+        </p>
+        <p class="fine">
+          Game logic from the community decompilation · engine, renderer and web
+          build are original work.
+        </p>
+      </footer>
+    </div>
+  </div>
+</main>
+
+<!-- ================= GAME ================= -->
+<!-- The canvas id MUST stay "#canvas" — it is the WebGPU surface selector in
+     gfx_webgpu_compat.h and the SDL2 canvas the shell binds to. Its backing
+     store is sized by the shell BEFORE boot, because the engine reads the
+     drawable size once at gfx_init and renders natively at that resolution. -->
+<div id="stage" hidden>
+  <canvas id="canvas" width="640" height="480" tabindex="-1"></canvas>
+  <button id="fullscreen" class="fs-btn" title="Fullscreen (F)" aria-label="Fullscreen">⛶</button>
+</div>
+
+<div id="save-banner" role="status" aria-live="polite" hidden>
+  Couldn't save to browser storage — progress may not persist.
+</div>
+
+<script src="mdkr64-shell.js"></script>
+</body>
+</html>
