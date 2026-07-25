@@ -141,7 +141,8 @@
                 <h3>Good to know</h3>
                 <ul class="notes">
                   <li><strong>Saves persist</strong> in your browser, so lap records
-                    survive a reload.</li>
+                    survive a reload. <em>Stored data</em> (step&nbsp;04) erases
+                    them if you want a clean slate.</li>
                   <li>Needs <strong>WebGPU</strong> — Chrome or Edge 113+. There is no
                     WebGL fallback, so this page says so up front rather than
                     running black.</li>
@@ -170,6 +171,32 @@
                 <a href="https://github.com/akratch/golden-balloon/issues">Open an
                 issue</a>.</li>
             </ul>
+          </div>
+        </section>
+
+        <!-- Stored data. Its own section, away from the ROM picker, because this
+             is the recovery path: if a stored save ever makes the game misbehave
+             on boot, wiping it here is the way out. The shell talks to IndexedDB
+             directly so this still works when the engine does not. -->
+        <section class="sect" aria-labelledby="data-title">
+          <div class="pos" aria-hidden="true">04</div>
+          <div class="panel">
+            <h3 id="data-title">Stored data</h3>
+            <p class="fine">
+              This page keeps two things in your browser, and nothing anywhere
+              else: the ROM you picked, and your saved progress (Adventure files,
+              lap records, options). Each clears on its own.
+            </p>
+            <div class="actions">
+              <button id="clear-save" class="btn btn-danger">Erase saved progress</button>
+            </div>
+            <p id="save-status" role="status" aria-live="polite"></p>
+            <p class="fine">
+              Erasing progress is destructive and asks first. It does not touch
+              your ROM — use <em>Forget stored ROM</em> up in step&nbsp;01 for
+              that. If the game ever boots into a broken state that survives a
+              reload, this is the button that fixes it.
+            </p>
           </div>
         </section>
 

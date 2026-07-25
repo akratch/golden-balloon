@@ -18,10 +18,10 @@
      - headings are heavy italic uppercase — motorsport signage.
 
    Element ids are a contract with mdkr64-shell.js (gate, gate-msg, rom-ui, drop,
-   rom-input, rom-status, play, forget, stage, canvas, fps, fullscreen,
-   save-banner). Note that the shell ASSIGNS `className` on #rom-status, which
-   drops any layout class, so layout for it hangs off the id and .err/.ok are
-   colour-only modifiers. */
+   rom-input, rom-status, play, forget, clear-save, save-status, stage, canvas,
+   fps, fullscreen, save-banner). Note that the shell ASSIGNS `className` on
+   #rom-status and #save-status, which drops any layout class, so layout for them
+   hangs off the id and .err/.ok are colour-only modifiers. */
 
 :root {
   --gold:       #ffc42e;
@@ -236,6 +236,23 @@ code {
   color: var(--ink-dim); border: 1px solid var(--line); font-weight: 600;
 }
 .btn-ghost:hover { color: var(--ink); border-color: rgba(160, 190, 230, .55); }
+
+/* Destructive. Same ghost shape so it does not shout from the page, but outlined
+   in the error red the .err status colour already uses, so "this one deletes
+   something" reads before the label does. It confirms before acting. */
+.btn-danger {
+  padding: 12px 18px; border-radius: 2px; background: transparent;
+  color: var(--err); border: 1px solid rgba(255, 129, 137, .45); font-weight: 700;
+}
+.btn-danger:hover:not(:disabled) {
+  color: #fff; background: rgba(255, 129, 137, .14);
+  border-color: rgba(255, 129, 137, .8);
+}
+.btn-danger:disabled { opacity: .45; cursor: not-allowed; }
+
+/* #save-status mirrors #rom-status: the shell ASSIGNS className on it, so layout
+   hangs off the id and .err/.ok stay colour-only. */
+#save-status { min-height: 22px; margin: 12px 0 0; font-size: 14px; }
 
 .privacy {
   margin: 18px 0 0; padding-top: 16px; border-top: 1px solid var(--line);

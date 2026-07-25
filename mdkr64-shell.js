@@ -83,11 +83,18 @@ function loadEngineFactory() {
 }
 
 // ---- Persist saves (IDBFS -> IndexedDB) ------------------------------------
-// FS.syncfs is not reentrant; serialize and never overlap two syncs.
+// FS.syncfs is not reentrant, and there used to be TWO independent coalescers in
+// this page: this one, and the engine's own EM_ASM after every EEPROM write
+// (platform/stubs_dkr.c), which guarded on Module.__mdkrSyncing. Neither knew
+// about the other, so the 5-second timer below could start a sync while an
+// EEPROM-write sync was still in flight. There is now exactly ONE: this
+// function is installed as Module.__mdkrPersist and the engine calls it, so
+// every sync in the page — timer, pagehide, EEPROM write, save wipe — queues
+// behind the same flag and reports errors in the same place.
 let syncing = false, syncAgain = false;
-function persist() {
-  if (!module || !module.FS) return;
-  if (syncing) { syncAgain = true; return; }
+function persist(done) {
+  if (!module || !module.FS) { if (done) done(); return; }
+  if (syncing) { syncAgain = true; if (done) done(); return; }
   syncing = true;
   try {
     module.FS.syncfs(false, (err) => {
@@ -95,8 +102,9 @@ function persist() {
       if (err) { $("save-banner").hidden = false; }
       else { savedOnce = true; }
       if (syncAgain) { syncAgain = false; persist(); }
+      if (done) done(err || null);
     });
-  } catch (e) { syncing = false; }
+  } catch (e) { syncing = false; if (done) done(e); }
 }
 
 // ---- Resume the AudioContext on a user gesture (autoplay policy) -----------
@@ -219,6 +227,10 @@ async function boot() {
     try { await new Promise((res) => module.FS.syncfs(false, () => res())); } catch (e) {}
   }
 
+  // The engine's post-EEPROM-write sync calls this, so the whole page shares one
+  // in-flight sync (see the comment on persist()).
+  module.__mdkrPersist = () => persist();
+
   // Arm persistence + audio-resume gestures (once).
   setInterval(persist, 5000);
   addEventListener("pagehide", persist);
@@ -235,6 +247,81 @@ async function boot() {
   canvas.focus();
   status.textContent = "";
   module.callMain(["--rom", ROM_PATH]);
+}
+
+// ---- Stored data: talk to IndexedDB directly, NOT through the engine -------
+// This is the recovery path, so it must work when the engine does NOT. A save
+// that the engine crashes on lives in IndexedDB and comes back on every reload;
+// if wiping it required booting the engine to get an FS, the one state that
+// needs wiping would be the one state you could not wipe from. So these helpers
+// go straight at the IDBFS backing store.
+//
+// IDBFS names the database after the mount point ("/rom", "/save") and keeps
+// every file in one object store, "FILE_DATA", keyed by absolute path. Opening
+// with no explicit version joins whatever version is already there instead of
+// fighting IDBFS's own; clearing the store inside a plain readwrite transaction
+// works even while the engine holds an open connection, which deleteDatabase()
+// does not (it would sit in onblocked).
+const IDB_STORE = "FILE_DATA";
+
+function idbOpen(dbName) {
+  return new Promise((resolve) => {
+    let req;
+    try { req = indexedDB.open(dbName); } catch (e) { resolve(null); return; }
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => resolve(null);
+    req.onblocked = () => resolve(null);
+  });
+}
+
+// Number of files IDBFS has stored for a mount (0 when the store does not exist).
+// indexedDB.databases() first, so a first-ever visit does not create an empty
+// database just to be told it is empty.
+async function idbCount(dbName) {
+  try {
+    if (indexedDB.databases) {
+      const names = (await indexedDB.databases()).map((d) => d.name);
+      if (!names.includes(dbName)) return 0;
+    }
+  } catch (e) { /* fall through to open() */ }
+  const db = await idbOpen(dbName);
+  if (!db) return 0;
+  if (!db.objectStoreNames.contains(IDB_STORE)) { db.close(); return 0; }
+  return new Promise((resolve) => {
+    let n = 0;
+    try {
+      const req = db.transaction(IDB_STORE, "readonly").objectStore(IDB_STORE).count();
+      req.onsuccess = () => { n = req.result | 0; db.close(); resolve(n); };
+      req.onerror = () => { db.close(); resolve(0); };
+    } catch (e) { db.close(); resolve(0); }
+  });
+}
+
+async function idbClear(dbName) {
+  const db = await idbOpen(dbName);
+  if (!db) return false;
+  if (!db.objectStoreNames.contains(IDB_STORE)) { db.close(); return true; }
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      tx.objectStore(IDB_STORE).clear();
+      tx.oncomplete = () => { db.close(); resolve(true); };
+      tx.onerror = () => { db.close(); resolve(false); };
+      tx.onabort = () => { db.close(); resolve(false); };
+    } catch (e) { db.close(); resolve(false); }
+  });
+}
+
+// If a module happens to be live (a boot that bounced back to the launcher), keep
+// its in-memory FS in step so it cannot write the old bytes back out.
+function fsUnlinkAll(dir) {
+  if (!module || !module.FS) return;
+  try {
+    for (const name of module.FS.readdir(dir)) {
+      if (name === "." || name === "..") continue;
+      try { module.FS.unlink(dir + "/" + name); } catch (e) {}
+    }
+  } catch (e) {}
 }
 
 // ---- ROM picker + Forget ---------------------------------------------------
@@ -315,17 +402,75 @@ function wireRomUi() {
     boot();
   });
 
+  // Forget the stored ROM. This used to instantiate a SECOND engine module just to
+  // get an FS, never mount IDBFS on it, and then unlink a path that did not exist
+  // there — so it downloaded the whole engine and deleted nothing. It also had no
+  // code path that ever un-hid the button, so it was unreachable as well as
+  // ineffective. Both are fixed: it clears the "/rom" store directly.
   $("forget").addEventListener("click", async () => {
-    try {
-      const m = module || (await loadEngineFactory().then((f) => f({ noInitialRun: true })));
-      // Best-effort: remove the persisted ROM.
-      try { m.FS.unlink(ROM_PATH); } catch (e) {}
-      try { m.FS.syncfs(false, () => {}); } catch (e) {}
-    } catch (e) {}
-    $("forget").hidden = true;
-    $("rom-status").textContent = "Stored ROM forgotten. Pick a file to play.";
+    const btn = $("forget");
+    btn.disabled = true;
+    fsUnlinkAll("/rom");
+    const ok = await idbClear("/rom");
+    persist();
+    romBytes = null;
+    btn.disabled = false;
+    btn.hidden = true;
+    $("rom-status").className = ok ? "" : "err";
+    $("rom-status").textContent = ok
+      ? "Stored ROM forgotten. Pick a file to play."
+      : "Couldn't clear the stored ROM — clear this site's data in your browser settings.";
     $("play").disabled = true;
   });
+
+  // ---- Erase saved progress -------------------------------------------------
+  // Deliberately separate from the ROM control and separately confirmed: this is
+  // the only thing that can recover a browser whose stored save makes the engine
+  // misbehave on boot, and it is also the only thing that destroys lap records.
+  const clearSave = $("clear-save");
+  if (clearSave) {
+    clearSave.addEventListener("click", async () => {
+      const status = $("save-status");
+      const n = await idbCount("/save");
+      if (n === 0) {
+        status.className = "";
+        status.textContent = "There is no saved progress stored for this site.";
+        return;
+      }
+      if (!confirm(
+            "Erase all saved progress for this page?\n\n" +
+            "This deletes your Adventure files, lap records and options. " +
+            "It cannot be undone, and it does not touch your ROM.")) {
+        return;
+      }
+      clearSave.disabled = true;
+      status.className = "";
+      status.textContent = "Erasing…";
+      fsUnlinkAll("/save");
+      const ok = await idbClear("/save");
+      persist();
+      clearSave.disabled = false;
+      status.className = ok ? "ok" : "err";
+      status.textContent = ok
+        ? "Saved progress erased. Reload the page to start fresh."
+        : "Couldn't erase it here — clear this site's data in your browser settings.";
+    });
+  }
+}
+
+// ---- Is there already a ROM in IndexedDB? ----------------------------------
+// Without this the persisted ROM was unreachable: #play stayed disabled and
+// #forget stayed hidden until a file was picked, so "the ROM persists across
+// reloads" was true of the storage and false of the UI.
+async function probeStoredRom() {
+  if ((await idbCount("/rom")) === 0) return;
+  $("forget").hidden = false;
+  const play = $("play");
+  if (!play.dataset.blocked) {
+    play.disabled = false;
+    $("rom-status").className = "ok";
+    $("rom-status").textContent = "✓ Using the ROM stored in this browser — press Play.";
+  }
 }
 
 // ---- Frame-rate readout ----------------------------------------------------
@@ -397,8 +542,10 @@ function wireFullscreen() {
     play.disabled = true;
     play.dataset.blocked = "1";     // keep it disabled even after a valid ROM
     play.title = err;
+    await probeStoredRom();         // still show Forget, so storage stays clearable
     return;
   }
   msg.className = "status-line";
   msg.textContent = "";
+  await probeStoredRom();
 })();
