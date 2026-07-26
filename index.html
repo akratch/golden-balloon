@@ -84,6 +84,29 @@
 
             <p id="rom-status" role="status" aria-live="polite"></p>
 
+            <div class="quality">
+              <label class="quality-label" for="mode">Presentation</label>
+              <select id="mode" class="quality-select">
+                <option value="remastered">Remastered &mdash; everything on</option>
+                <option value="restored">Restored &mdash; original look, modern fidelity</option>
+                <option value="pure">Pure &mdash; original 4:3, no enhancements</option>
+              </select>
+              <label class="quality-label" for="scale">Supersampling</label>
+              <select id="scale" class="quality-select">
+                <option value="">Mode default (2&times;)</option>
+                <option value="1">Off (1&times;) &mdash; reference</option>
+                <option value="2">2&times;</option>
+                <option value="3">3&times;</option>
+                <option value="4">4&times; &mdash; sharpest, heaviest</option>
+              </select>
+              <p class="quality-note">Supersampling renders above your window size and
+                filters back down, which is what removes the stair-stepping on edges.
+                Restored and Remastered use 2&times;. <strong>Set it to Off and back to
+                4&times; while watching the balloons and palm trees</strong> &mdash; that
+                is the difference. It costs fill rate, so drop back if the frame rate
+                suffers.</p>
+            </div>
+
             <div class="actions">
               <button id="play" class="btn btn-primary" disabled>
                 <span>▶ Play</span>

@@ -160,6 +160,32 @@ function validateRom(bytes, name) {
   return null;
 }
 
+// ---- Presentation preferences ---------------------------------------------
+// Remembered across sessions so a chosen mode survives a reload, and reflected
+// from the URL so a shared link opens on the same settings.
+const PREF_MODE = "mdkr64.mode";
+const PREF_SCALE = "mdkr64.scale";
+function initQualityControls() {
+  const qsp = new URLSearchParams(location.search);
+  const mode = $("mode");
+  const scale = $("scale");
+  if (!mode || !scale) return;
+  try {
+    const m = qsp.get("mode") || localStorage.getItem(PREF_MODE);
+    const s = qsp.get("scale") || localStorage.getItem(PREF_SCALE);
+    if (m && [...mode.options].some((o) => o.value === m)) mode.value = m;
+    if (s !== null && [...scale.options].some((o) => o.value === s)) scale.value = s;
+  } catch (_) { /* private mode: fall back to the defaults in the markup */ }
+  const save = () => {
+    try {
+      localStorage.setItem(PREF_MODE, mode.value);
+      localStorage.setItem(PREF_SCALE, scale.value);
+    } catch (_) { /* nothing to do if storage is unavailable */ }
+  };
+  mode.addEventListener("change", save);
+  scale.addEventListener("change", save);
+}
+
 // ---- Engine factory (loads mdkr64_web.js, which defines createMDKR64) -------
 function loadEngineFactory() {
   if (window.createMDKR64) return Promise.resolve(window.createMDKR64);
@@ -456,6 +482,19 @@ async function boot() {
   canvas.focus();
   status.textContent = "";
   const mainArgs = ["--rom", ROM_PATH];
+
+  // Presentation mode + supersampling. The picker persists the choice; a URL
+  // parameter overrides it so a comparison can be linked directly
+  // (?mode=restored&scale=4). Anything unrecognised is ignored rather than
+  // passed through -- an unknown --video-set key makes the engine exit 2.
+  const MODES = ["pure", "restored", "remastered"];
+  const modeSel = $("mode");
+  const scaleSel = $("scale");
+  let mode = (qs.get("mode") || (modeSel && modeSel.value) || "").toLowerCase();
+  let scale = qs.get("scale") || (scaleSel && scaleSel.value) || "";
+  if (MODES.includes(mode)) mainArgs.push("--" + mode);
+  if (/^[1-4]$/.test(scale)) mainArgs.push("--video-set", "Video.RenderScale=" + scale);
+
   const aspect = qs.get("aspect");
   const fov = qs.get("fov");
   const maxHfov = qs.get("maxHfov");
@@ -786,6 +825,7 @@ function wireFullscreen() {
   // line -- no picker, no controls, no explanation of what the page even is, and
   // no way to get as far as trying. The gate now only blocks the Play ACTION.
   $("rom-ui").hidden = false;
+  initQualityControls();
 
   const err = await gate();
   const msg = $("gate-msg");

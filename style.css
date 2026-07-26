@@ -338,3 +338,46 @@ kbd {
    line; without this they inherit the ink colour and read as plain text. */
 .notes a, .foot a { color: var(--gold); text-decoration: underline; }
 .notes a:hover, .foot a:hover { color: #ffd76a; }
+
+/* --- Presentation controls (videoconf) --------------------------------- */
+.quality {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px 14px;
+  align-items: center;
+  margin: 18px 0 4px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(10, 36, 71, .45);
+}
+.quality-label {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--ink-dim);
+  letter-spacing: .01em;
+}
+.quality-select {
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--navy);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 10px;
+}
+.quality-select:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+.quality-note {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+@media (max-width: 520px) {
+  .quality { grid-template-columns: 1fr; gap: 6px; }
+}
