@@ -24,6 +24,98 @@ let module = null;       // the instantiated engine Module
 let booted = false;
 let savedOnce = false;
 
+// ---- Browser regression bridge -------------------------------------------
+// A CDP test can install this object with Page.addScriptToEvaluateOnNewDocument
+// before any page code runs. Nothing is read from the URL and no test asset is
+// shipped: the fixture text remains in the test process and is written into the
+// module's private MEMFS only after the user-supplied ROM has passed the normal
+// picker/identity gate. Ordinary visitors never create this object, so this path
+// is inert in production.
+const testConfig = (() => {
+  const value = globalThis.__mdkrTestConfig;
+  return value && typeof value === "object" ? value : null;
+})();
+const testState = testConfig ? {
+  phase: "shell-loaded",
+  exitCode: null,
+  abortReason: null,
+  errors: [],
+  storage: null,
+  module: null,
+} : null;
+if (testState) globalThis.__mdkrTestState = testState;
+
+function testMark(phase) {
+  if (testState) testState.phase = phase;
+}
+
+function testError(value) {
+  if (!testState) return;
+  const text = String(value == null ? "" : value);
+  testState.errors.push(text.slice(0, 1000));
+  if (testState.errors.length > 32) testState.errors.shift();
+}
+
+// FNV-1a is not a security hash; it is a compact reload oracle for the 512-byte
+// EEPROM. Never fingerprint the ROM here: the browser check only records that
+// the expected private file exists and has the legal 12 MiB size.
+function testFileInfo(path, includeHash) {
+  if (!module || !module.FS) return { exists: false, size: 0, hash: null };
+  try {
+    const bytes = module.FS.readFile(path);
+    let hash = null;
+    if (includeHash) {
+      let value = 0x811c9dc5;
+      for (const byte of bytes) {
+        value ^= byte;
+        value = Math.imul(value, 0x01000193) >>> 0;
+      }
+      hash = value.toString(16).padStart(8, "0");
+    }
+    return { exists: true, size: bytes.length, hash };
+  } catch (e) {
+    return { exists: false, size: 0, hash: null };
+  }
+}
+
+function testAudioInfo() {
+  const audio = module && module.mdkrAudio;
+  if (!audio) return null;
+  return {
+    ready: audio.ready === true,
+    failed: audio.failed === true,
+    posted: Number(audio.posted) || 0,
+    ring: Number(audio.statRing) || 0,
+    underflows: Number(audio.under) || 0,
+    contextState: audio.ctx ? String(audio.ctx.state) : "missing",
+  };
+}
+
+function testRefreshExitState() {
+  if (!testState || !module || testState.phase !== "main-started") return;
+  if (Number.isInteger(module.__mdkrExitCode)) {
+    testState.exitCode = module.__mdkrExitCode;
+    testMark("exited");
+  }
+}
+
+if (testState) {
+  globalThis.__mdkrTestSnapshot = () => {
+    testRefreshExitState();
+    return {
+      phase: testState.phase,
+      exitCode: testState.exitCode,
+      abortReason: testState.abortReason,
+      errors: testState.errors.slice(),
+      frames: module && Number.isFinite(module.__mdkrFrames)
+        ? module.__mdkrFrames : 0,
+      rom: testFileInfo(ROM_PATH, false),
+      save: testFileInfo("/save/eeprom.bin", true),
+      audio: testAudioInfo(),
+    };
+  };
+}
+
 // ---- WebGPU capability gate ------------------------------------------------
 // A real adapter request (not just navigator.gpu presence): some browsers expose
 // the API but have no usable GPU, which would boot to a permanently black canvas.
@@ -91,20 +183,45 @@ function loadEngineFactory() {
 // function is installed as Module.__mdkrPersist and the engine calls it, so
 // every sync in the page — timer, pagehide, EEPROM write, save wipe — queues
 // behind the same flag and reports errors in the same place.
-let syncing = false, syncAgain = false;
+let syncing = false, syncAgain = false, persistError = null;
+let persistWaiters = [];
+
+function finishPersistWaiters(err) {
+  const waiters = persistWaiters;
+  persistWaiters = [];
+  for (const done of waiters) {
+    try { done(err || null); } catch (e) {}
+  }
+}
+
 function persist(done) {
-  if (!module || !module.FS) { if (done) done(); return; }
-  if (syncing) { syncAgain = true; if (done) done(); return; }
+  if (done) persistWaiters.push(done);
+  if (!module || !module.FS) { finishPersistWaiters(null); return; }
+  if (syncing) { syncAgain = true; return; }
   syncing = true;
   try {
     module.FS.syncfs(false, (err) => {
       syncing = false;
-      if (err) { $("save-banner").hidden = false; }
+      if (err) {
+        persistError = persistError || err;
+        $("save-banner").hidden = false;
+      }
       else { savedOnce = true; }
-      if (syncAgain) { syncAgain = false; persist(); }
-      if (done) done(err || null);
+      if (syncAgain) {
+        syncAgain = false;
+        persist();
+        return;
+      }
+      const finalError = persistError;
+      persistError = null;
+      finishPersistWaiters(finalError);
     });
-  } catch (e) { syncing = false; if (done) done(e); }
+  } catch (e) {
+    syncing = false;
+    syncAgain = false;
+    persistError = null;
+    finishPersistWaiters(e);
+  }
 }
 
 // ---- Resume the AudioContext on a user gesture (autoplay policy) -----------
@@ -116,57 +233,85 @@ function resumeAudio() {
 }
 
 // ---- Canvas sizing ---------------------------------------------------------
-// MUST run before callMain: main_pc.c reads platform_sdl_drawable_size() once at
-// gfx_init and calls gfx_set_dimensions() with it, so the engine renders NATIVELY
-// at whatever the canvas backing store is when it boots. The canvas used to stay
-// at its 640x480 intrinsic size with CSS `width:auto`, so nothing ever scaled it
-// up and the game drew in a tiny box in the middle of the page.
-//
-// Fit a 4:3 box to the viewport, multiply by devicePixelRatio for crispness on
-// HiDPI, and cap the long edge so a 4K display does not ask the HLE for a
-// framebuffer far larger than the game ever needs.
-const ASPECT = 4 / 3;
-const MAX_EDGE = 1920;
+// The engine now samples the canvas backing store every frame. Fill the browser
+// viewport at its real aspect, keep CSS pixels and GPU pixels separate for HiDPI,
+// and resize live (including fullscreen/orientation changes). The long-edge and
+// pixel-budget caps prevent a 5K/8K display from allocating several full-resolution
+// WebGPU post-processing targets while retaining the exact host aspect.
+const MAX_EDGE = 2560;
+const MAX_PIXELS = 2560 * 1440;
 
-function sizeCanvasForBoot() {
+function sizeCanvas() {
   const canvas = $("canvas");
   const vw = Math.max(320, window.innerWidth);
   const vh = Math.max(240, window.innerHeight);
-
-  // Letterbox: fit 4:3 inside the viewport.
-  let cssW = vw, cssH = Math.round(vw / ASPECT);
-  if (cssH > vh) { cssH = vh; cssW = Math.round(vh * ASPECT); }
-
+  const cssW = vw, cssH = vh;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   let bw = Math.round(cssW * dpr), bh = Math.round(cssH * dpr);
-  if (bw > MAX_EDGE) { bw = MAX_EDGE; bh = Math.round(MAX_EDGE / ASPECT); }
+  const edgeScale = Math.min(1, MAX_EDGE / Math.max(bw, bh));
+  const pixelScale = Math.min(1, Math.sqrt(MAX_PIXELS / Math.max(1, bw * bh)));
+  const scale = Math.min(edgeScale, pixelScale);
+  // Apply one scale to both axes. Independent minimums would subtly change the
+  // backing-store aspect in very wide or very short browser windows, leaving
+  // CSS to stretch the otherwise-correct engine output.
+  bw = Math.max(1, Math.round(bw * scale));
+  bh = Math.max(1, Math.round(bh * scale));
 
-  canvas.width = bw;
-  canvas.height = bh;
+  if (canvas.width !== bw) canvas.width = bw;
+  if (canvas.height !== bh) canvas.height = bh;
   canvas.style.width = cssW + "px";
   canvas.style.height = cssH + "px";
   return { bw, bh, cssW, cssH };
+}
+
+let canvasResizeFrame = 0;
+let canvasResizeObserver = null;
+function scheduleCanvasResize() {
+  if (canvasResizeFrame) return;
+  canvasResizeFrame = requestAnimationFrame(() => {
+    canvasResizeFrame = 0;
+    const dim = sizeCanvas();
+    if (module) {
+      module.__mdkrCanvasSize = [dim.bw, dim.bh];
+    }
+  });
+}
+
+function wireCanvasResize() {
+  addEventListener("resize", scheduleCanvasResize, { passive: true });
+  addEventListener("orientationchange", scheduleCanvasResize, { passive: true });
+  document.addEventListener("fullscreenchange", scheduleCanvasResize);
+  if (typeof ResizeObserver !== "undefined") {
+    // Retain the observer for the lifetime of the page. Relying on the browser's
+    // target-registration internals to keep an otherwise-unreferenced observer
+    // alive makes resize behavior GC-dependent.
+    canvasResizeObserver = new ResizeObserver(scheduleCanvasResize);
+    canvasResizeObserver.observe($("stage"));
+  }
 }
 
 // ---- Boot ------------------------------------------------------------------
 async function boot() {
   if (booted) return;
   booted = true;
+  testMark("boot-started");
   const canvas = $("canvas");
   const status = $("gate-msg");
   status.textContent = "Downloading engine…";
 
-  // Size the surface first, then reveal the stage, so the engine's one-shot
-  // dimension read sees the real size.
-  const dim = sizeCanvasForBoot();
+  // Size the surface first so SDL and the first WebGPU configure agree.
+  const dim = sizeCanvas();
   console.log("[shell] canvas backing store " + dim.bw + "x" + dim.bh +
               " (css " + dim.cssW + "x" + dim.cssH + ")");
 
   let createMDKR64;
   try {
     createMDKR64 = await loadEngineFactory();
+    testMark("factory-loaded");
   } catch (e) {
     booted = false;
+    testError(e && e.message ? e.message : e);
+    testMark("factory-failed");
     status.textContent = "Couldn't load the engine (" + e.message + "). Reload to retry.";
     $("play").disabled = false;
     return;
@@ -180,6 +325,28 @@ async function boot() {
   // shows dtms~16.7 with R=1. ?trace=2 adds the display-list opcode trace.
   const qs = new URLSearchParams(location.search);
   const traceLevel = qs.get("trace");
+  // ?objcoll=legacy restores the pre-wave-"objcoll" behaviour, where
+  // func_80017A18 returned 0 and every collision-meshed object was intangible.
+  // It is the same A/B arm tests/check_door_blocks.py drives natively, exposed
+  // here so a human can compare the two builds without rebuilding: with it set,
+  // a locked hub door can be driven through; without it, the door blocks.
+  const objCollValue = qs.get("objcoll");
+  const objColl = objCollValue === "legacy" || objCollValue === "trace"
+    ? objCollValue : null;
+  // ?track=<levelId>[:<vehicle>] RETARGETS the next race -- it does NOT boot
+  // straight in. You still navigate the menus and start a race normally (Tracks
+  // or Time Trial, any track); mdkr_force_track() then rewrites gTrackIdToLoad
+  // so <levelId> loads instead of the one you picked. Menu backgrounds and the
+  // track-select preview are deliberately left alone.
+  //
+  // Useful because saves are per-ORIGIN: a test server on another port cannot
+  // see your real progress, and reaching a boss legitimately costs four world
+  // balloons. 38 = Tricky's volcano, 5 = Ancient Lake, 12 = Dino Domain lobby.
+  // Optional vehicle: 0 = car, 1 = hovercraft, 2 = plane.
+  const loadTrackValue = qs.get("track");
+  const loadTrack = /^(?:[0-9]|[1-5][0-9]|6[0-5])(?::[0-2])?$/.test(
+    loadTrackValue || ""
+  ) ? loadTrackValue : null;
 
   module = await createMDKR64({
     canvas,
@@ -190,9 +357,29 @@ async function boot() {
       if (traceLevel && m && m.ENV) {
         try { m.ENV.MDKR_TRACE = String(traceLevel); } catch (e) {}
       }
+      if (objColl && m && m.ENV) {
+        try { m.ENV.MDKR_OBJCOLL = objColl; } catch (e) {}
+      }
+      if (loadTrack && m && m.ENV) {
+        try { m.ENV.MDKR_LOAD_TRACK = loadTrack; } catch (e) {}
+      }
+      if (testConfig && testConfig.env && m && m.ENV) {
+        for (const [key, value] of Object.entries(testConfig.env)) {
+          if (/^MDKR_[A-Z0-9_]+$/.test(key)) {
+            try { m.ENV[key] = String(value).slice(0, 256); } catch (e) {}
+          }
+        }
+      }
     }],
-    printErr: (t) => console.error(t),
+    printErr: (t) => {
+      testError(t);
+      console.error(t);
+    },
     onExit: (code) => {
+      if (testState) {
+        testState.exitCode = Number(code);
+        testMark("exited");
+      }
       // The engine's main() returns nonzero when rom_io.c refuses the ROM.
       if (code && code !== 0) {
         $("gate").hidden = false;
@@ -204,27 +391,49 @@ async function boot() {
         booted = false;
       }
     },
-    onAbort: () => {
+    onAbort: (reason) => {
+      if (testState) {
+        testState.abortReason = String(reason == null ? "abort" : reason);
+        testMark("aborted");
+      }
       status.textContent = "The engine crashed — reload to continue from your last save.";
       persist();
     },
   });
+  if (testState) testState.module = module;
+  testMark("module-ready");
 
   status.textContent = "Preparing storage…";
   // IDBFS-backed ROM + save dirs. syncfs(true) pulls any persisted copies in.
+  let storageMounted = false;
   try {
     module.FS.mkdir("/rom");  module.FS.mount(module.IDBFS, {}, "/rom");
     module.FS.mkdir("/save"); module.FS.mount(module.IDBFS, {}, "/save");
-    await new Promise((res) => module.FS.syncfs(true, () => res()));
+    await new Promise((resolve, reject) => module.FS.syncfs(
+      true, (err) => err ? reject(err) : resolve()
+    ));
+    storageMounted = true;
   } catch (e) {
+    testError("IDBFS mount/sync failed: " + (e && e.message ? e.message : e));
     console.warn("IDBFS mount/sync failed; running from memory only:", e);
   }
 
+  const storedRomBeforeWrite = testFileInfo(ROM_PATH, false);
+  const saveBeforeMain = testFileInfo("/save/eeprom.bin", true);
+
   // Write the freshly-picked ROM (if any) and persist it for next visit.
+  let pickedRomWritten = false;
   if (romBytes) {
     module.FS.writeFile(ROM_PATH, romBytes);
     romBytes = null;
-    try { await new Promise((res) => module.FS.syncfs(false, () => res())); } catch (e) {}
+    pickedRomWritten = true;
+    try {
+      await new Promise((resolve, reject) => module.FS.syncfs(
+        false, (err) => err ? reject(err) : resolve()
+      ));
+    } catch (e) {
+      testError("ROM persistence failed: " + (e && e.message ? e.message : e));
+    }
   }
 
   // The engine's post-EEPROM-write sync calls this, so the whole page shares one
@@ -246,7 +455,51 @@ async function boot() {
   $("stage").hidden = false;
   canvas.focus();
   status.textContent = "";
-  module.callMain(["--rom", ROM_PATH]);
+  const mainArgs = ["--rom", ROM_PATH];
+  const aspect = qs.get("aspect");
+  const fov = qs.get("fov");
+  const maxHfov = qs.get("maxHfov");
+  const widescreen = qs.get("widescreen");
+  if (aspect) mainArgs.push("--aspect", aspect);
+  if (fov) mainArgs.push("--fov", fov);
+  if (maxHfov) mainArgs.push("--max-hfov", maxHfov);
+  if (widescreen === "0" || widescreen === "off") mainArgs.push("--legacy-stretch");
+
+  // The browser regression installs only in-memory fixture text. Keep limits
+  // tight and fail the test loudly if its configuration is malformed.
+  if (testConfig) {
+    if (typeof testConfig.inputScript === "string") {
+      if (testConfig.inputScript.length > 1024 * 1024) {
+        throw new Error("browser test input script exceeds 1 MiB");
+      }
+      const inputPath = "/tmp/mdkr-browser-input.txt";
+      module.FS.writeFile(inputPath, testConfig.inputScript);
+      mainArgs.push("--input-script", inputPath);
+    }
+    const frames = Number(testConfig.headlessFrames);
+    if (Number.isInteger(frames) && frames > 0 && frames <= 100000) {
+      mainArgs.push("--headless-frames", String(frames));
+    }
+    testState.storage = {
+      mounted: storageMounted,
+      pickedRomWritten,
+      storedRomBeforeWrite,
+      romBeforeMain: testFileInfo(ROM_PATH, false),
+      saveBeforeMain,
+    };
+  }
+  testMark("main-started");
+  try {
+    const result = module.callMain(mainArgs);
+    if (result && typeof result.then === "function") await result;
+    // With Asyncify, callMain() returns when the first rAF unwinds, not when C
+    // main exits. platform_frame_sync publishes the real finite-run exit below.
+    testRefreshExitState();
+  } catch (e) {
+    testError(e && e.stack ? e.stack : e);
+    testMark("main-threw");
+    throw e;
+  }
 }
 
 // ---- Stored data: talk to IndexedDB directly, NOT through the engine -------
@@ -526,6 +779,7 @@ function wireFullscreen() {
   wireRomUi();
   wireFullscreen();
   wireFpsReadout();
+  wireCanvasResize();
 
   // ALWAYS reveal the launcher UI. It used to be hidden behind the WebGPU gate,
   // which meant a browser without a usable adapter showed nothing but an error

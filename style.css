@@ -293,11 +293,9 @@ kbd {
 .foot p { margin: 6px 0; max-width: 74ch; }
 
 /* ---------- game stage ----------
-   The canvas backing store is sized by the shell BEFORE boot, because the engine
-   reads the drawable size once at gfx_init and renders natively at that
-   resolution. Previously the canvas stayed at its 640x480 intrinsic size with
-   `width:auto`, so nothing ever scaled it up — that is what rendered the game in
-   a tiny box. The stage now just centres it and letterboxes the remainder. */
+   The shell keeps the canvas at the live browser aspect and updates its backing
+   store on resize/fullscreen/orientation changes. The engine handles 3D framing
+   and the 4:3 UI safe area; CSS must not impose a second letterbox policy. */
 
 #stage {
   position: fixed; inset: 0; z-index: 10;
@@ -305,7 +303,11 @@ kbd {
 }
 #stage[hidden] { display: none; }
 
-#canvas { display: block; max-width: 100vw; max-height: 100vh; background: #000; outline: none; }
+#canvas {
+  display: block; width: 100vw; height: 100vh;
+  max-width: 100vw; max-height: 100vh;
+  background: #000; outline: none;
+}
 
 .fs-btn {
   position: fixed; right: 14px; bottom: 14px; z-index: 11;
