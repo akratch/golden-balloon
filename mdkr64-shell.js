@@ -24,6 +24,27 @@ let module = null;       // the instantiated engine Module
 let booted = false;
 let savedOnce = false;
 
+// One plain object is shared with the wasm input sampler. Pointer callbacks only
+// mutate browser state; C reads one coherent snapshot at its ordinary per-frame
+// input boundary, avoiding Asyncify re-entry while main() is suspended.
+const touchPadState = {
+  enabled: false,
+  buttons: 0,
+  stickX: 0,
+  stickY: 0,
+};
+
+function publishTouchPad() {
+  if (module) module.__mdkrTouchPad = touchPadState;
+}
+
+function clearTouchPad() {
+  touchPadState.buttons = 0;
+  touchPadState.stickX = 0;
+  touchPadState.stickY = 0;
+  publishTouchPad();
+}
+
 // ---- Browser regression bridge -------------------------------------------
 // A CDP test can install this object with Page.addScriptToEvaluateOnNewDocument
 // before any page code runs. Nothing is read from the URL and no test asset is
@@ -67,6 +88,7 @@ window.mdkr64ShowError = (message) => {
   );
   testError(text);
   testMark("graphics-failed");
+  clearTouchPad();
   $("stage").hidden = true;
   $("gate").hidden = false;
   const status = $("gate-msg");
@@ -624,6 +646,7 @@ async function boot() {
       });
     },
   });
+  publishTouchPad();
   if (testState) testState.module = module;
   testMark("module-ready");
 
@@ -976,6 +999,266 @@ function wireFpsReadout() {
   });
 }
 
+// ---- Mobile touch controller ----------------------------------------------
+// Touch is a first-class analog P1 controller, not a collection of synthetic
+// key events. It appears automatically on coarse-pointer devices, yields to a
+// connected physical gamepad unless the player explicitly asks to keep it, and
+// can always be hidden without leaving a held button behind.
+const TOUCH_PREF = "mdkr64.touch-controls";
+
+function wireTouchControls() {
+  const controls = $("touch-controls");
+  const toggle = $("touch-toggle");
+  const stage = $("stage");
+  const stick = $("touch-stick");
+  const knob = $("touch-stick-knob");
+  if (!controls || !toggle || !stage || !stick || !knob) return;
+
+  const qs = new URLSearchParams(location.search);
+  const forced = qs.get("touch");
+  const coarseQuery = matchMedia("(pointer: coarse)");
+  const noHoverQuery = matchMedia("(hover: none)");
+  let preference = "";
+  try { preference = localStorage.getItem(TOUCH_PREF) || ""; } catch (_) {}
+  // A persisted explicit "shown" is an opt-in equivalent to ?touch=1: the
+  // media queries can stop matching on the same physical device (a convertible
+  // with a keyboard attached), and the stored choice must still revive the
+  // overlay after reload.
+  const mediaCapable = () => coarseQuery.matches ||
+    (navigator.maxTouchPoints > 0 && noHoverQuery.matches);
+  const touchCapable = forced === "1" || forced === "on" ||
+    (forced !== "0" && forced !== "off" &&
+     (mediaCapable() || preference === "shown"));
+  if (!touchCapable) {
+    if (forced === "0" || forced === "off") return;
+    // A convertible can become touch-capable after load (keyboard detached,
+    // pointer turns coarse). Wire the overlay the moment that happens.
+    // MediaQueryList.addEventListener is missing on older engines (Safari <=13,
+    // old WebViews) and this branch runs on EVERY non-touch load inside the
+    // un-caught startup path — an unguarded throw here would abort bootstrap
+    // before the ROM picker and the WebGPU gate message ever appear.
+    if (typeof coarseQuery.addEventListener !== "function") return;
+    const onCapabilityChange = () => {
+      if (wireTouchControls.rewired || !mediaCapable()) return;
+      wireTouchControls.rewired = true;
+      coarseQuery.removeEventListener("change", onCapabilityChange);
+      noHoverQuery.removeEventListener("change", onCapabilityChange);
+      wireTouchControls();
+    };
+    try {
+      coarseQuery.addEventListener("change", onCapabilityChange);
+      noHoverQuery.addEventListener("change", onCapabilityChange);
+    } catch (_) {}
+    return;
+  }
+  let stickPointer = null;
+  let accessibilityButtons = 0;
+  const pressedPointers = new Map();
+  const pressedClasses = new Set();
+  const pulseTimers = new Map();
+  const actionButtons = [
+    ...controls.querySelectorAll("[data-touch-button]")
+  ];
+
+  const hasGamepad = () => {
+    try {
+      return !!(navigator.getGamepads &&
+        [...navigator.getGamepads()].some((pad) => pad && pad.connected));
+    } catch (_) {
+      return false;
+    }
+  };
+
+  function recomputeButtons() {
+    let buttons = accessibilityButtons;
+    pressedPointers.forEach((press) => {
+      if (press.inside) buttons |= press.bit;
+    });
+    touchPadState.buttons = buttons >>> 0;
+    publishTouchPad();
+  }
+
+  function refreshButtonClass(button) {
+    const buttonBit = Number(button.dataset.touchButton) >>> 0;
+    const active = (accessibilityButtons & buttonBit) !== 0 ||
+      [...pressedPointers.values()].some(
+        (press) => press.el === button && press.inside);
+    button.classList.toggle("is-pressed", active);
+    if (active) pressedClasses.add(button);
+    else pressedClasses.delete(button);
+  }
+
+  function releaseButtonPointer(pointerId) {
+    const press = pressedPointers.get(pointerId);
+    if (!press) return;
+    pressedPointers.delete(pointerId);
+    refreshButtonClass(press.el);
+    recomputeButtons();
+  }
+
+  function resetStick() {
+    stickPointer = null;
+    touchPadState.stickX = 0;
+    touchPadState.stickY = 0;
+    knob.style.transform = "translate3d(0, 0, 0)";
+    stick.classList.remove("is-active");
+    publishTouchPad();
+  }
+
+  function releaseAll() {
+    pressedPointers.clear();
+    accessibilityButtons = 0;
+    pulseTimers.forEach((timer) => clearTimeout(timer));
+    pulseTimers.clear();
+    pressedClasses.forEach((el) => el.classList.remove("is-pressed"));
+    pressedClasses.clear();
+    resetStick();
+    clearTouchPad();
+  }
+
+  function setVisible(visible, remember = false) {
+    controls.hidden = !visible;
+    toggle.hidden = false;
+    toggle.setAttribute("aria-pressed", visible ? "true" : "false");
+    toggle.setAttribute(
+      "aria-label", visible ? "Hide touch controls" : "Show touch controls");
+    toggle.querySelector(".touch-toggle-label").textContent =
+      visible ? "Controls" : "Show controls";
+    stage.classList.toggle("touch-ui-active", visible);
+    touchPadState.enabled = visible;
+    if (!visible) releaseAll();
+    publishTouchPad();
+    if (remember) {
+      preference = visible ? "shown" : "hidden";
+      try { localStorage.setItem(TOUCH_PREF, preference); } catch (_) {}
+    }
+  }
+
+  function updateStick(event) {
+    const rect = stick.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const radius = Math.max(24, Math.min(rect.width, rect.height) * 0.31);
+    let dx = event.clientX - centerX;
+    let dy = event.clientY - centerY;
+    const distance = Math.hypot(dx, dy);
+    if (distance > radius) {
+      dx = dx * radius / distance;
+      dy = dy * radius / distance;
+    }
+
+    // Eight percent center deadzone, then rescale the remaining travel so the
+    // outer ring still reaches the full N64 range. This prevents thumb tremor
+    // from steering while retaining continuous low-speed control.
+    const normalized = Math.min(1, Math.hypot(dx, dy) / radius);
+    const deadzone = 0.08;
+    const magnitude = normalized <= deadzone
+      ? 0 : (normalized - deadzone) / (1 - deadzone);
+    const angle = Math.atan2(dy, dx);
+    touchPadState.stickX = Math.round(Math.cos(angle) * magnitude * 80);
+    touchPadState.stickY = Math.round(-Math.sin(angle) * magnitude * 80);
+    knob.style.transform =
+      `translate3d(${dx.toFixed(1)}px, ${dy.toFixed(1)}px, 0)`;
+    publishTouchPad();
+  }
+
+  stick.addEventListener("pointerdown", (event) => {
+    if (stickPointer !== null) return;
+    event.preventDefault();
+    stickPointer = event.pointerId;
+    try { stick.setPointerCapture(event.pointerId); } catch (_) {}
+    stick.classList.add("is-active");
+    updateStick(event);
+  });
+  stick.addEventListener("pointermove", (event) => {
+    if (event.pointerId !== stickPointer) return;
+    event.preventDefault();
+    updateStick(event);
+  });
+  const endStick = (event) => {
+    if (event.pointerId !== stickPointer) return;
+    event.preventDefault();
+    resetStick();
+  };
+  stick.addEventListener("pointerup", endStick);
+  stick.addEventListener("pointercancel", endStick);
+  stick.addEventListener("lostpointercapture", (event) => {
+    if (event.pointerId === stickPointer) resetStick();
+  });
+
+  actionButtons.forEach((button) => {
+    const bit = Number(button.dataset.touchButton) >>> 0;
+    button.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      try { button.setPointerCapture(event.pointerId); } catch (_) {}
+      pressedPointers.set(event.pointerId, { bit, el: button, inside: true });
+      refreshButtonClass(button);
+      recomputeButtons();
+      try {
+        if (navigator.vibrate && event.pointerType !== "mouse") {
+          navigator.vibrate(8);
+        }
+      } catch (_) {}
+    });
+    button.addEventListener("pointermove", (event) => {
+      const press = pressedPointers.get(event.pointerId);
+      if (!press) return;
+      const rect = button.getBoundingClientRect();
+      const padding = 12;
+      const inside = event.clientX >= rect.left - padding &&
+        event.clientX <= rect.right + padding &&
+        event.clientY >= rect.top - padding &&
+        event.clientY <= rect.bottom + padding;
+      if (inside === press.inside) return;
+      press.inside = inside;
+      refreshButtonClass(button);
+      recomputeButtons();
+    });
+    ["pointerup", "pointercancel", "lostpointercapture"].forEach((name) => {
+      button.addEventListener(name, (event) =>
+        releaseButtonPointer(event.pointerId));
+    });
+    // Screen readers and switch controls may activate a button without Pointer
+    // Events. Hold it long enough to cross at least one authored 30 Hz sample.
+    button.addEventListener("click", (event) => {
+      if (event.detail !== 0) return;
+      const priorTimer = pulseTimers.get(bit);
+      if (priorTimer) clearTimeout(priorTimer);
+      accessibilityButtons |= bit;
+      button.classList.add("is-pressed");
+      recomputeButtons();
+      pulseTimers.set(bit, setTimeout(() => {
+        accessibilityButtons &= ~bit;
+        pulseTimers.delete(bit);
+        refreshButtonClass(button);
+        recomputeButtons();
+      }, 90));
+    });
+  });
+
+  toggle.addEventListener("click", () => {
+    setVisible(controls.hidden, true);
+  });
+  addEventListener("blur", releaseAll);
+  addEventListener("pagehide", releaseAll);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") releaseAll();
+  });
+  document.addEventListener("fullscreenchange", releaseAll);
+
+  addEventListener("gamepadconnected", () => {
+    if (!preference) setVisible(false, false);
+  });
+  addEventListener("gamepaddisconnected", () => {
+    if (!preference && !hasGamepad()) setVisible(true, false);
+  });
+
+  controls.hidden = false;
+  toggle.hidden = false;
+  setVisible(preference === "shown" ||
+    (preference !== "hidden" && !hasGamepad()), false);
+}
+
 // ---- Fullscreen ------------------------------------------------------------
 function wireFullscreen() {
   const btn = $("fullscreen");
@@ -1072,6 +1355,10 @@ function wireFullscreen() {
   wireFullscreen();
   wireFpsReadout();
   wireCanvasResize();
+  // A touch-subsystem failure must never block the launcher: everything after
+  // this line (save UI, revealing the ROM picker, the WebGPU gate message)
+  // matters on exactly the browsers most likely to lack a touch-era API.
+  try { wireTouchControls(); } catch (_) {}
   if (globalThis.MDKRSaveUI) {
     // Do not gate the rest of the launcher on storage availability. The save
     // panel reports its own actionable error while ROM selection remains usable.

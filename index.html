@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <title>Golden Balloon — play in your browser</title>
 <meta name="description" content="A native source port of the 1997 N64 kart racer, compiled to WebGPU and running entirely in your browser. Bring your own ROM.">
@@ -158,6 +158,12 @@
                   (full lock or nothing) where the original is analog. Plug one in
                   and press a button; it is picked up automatically.
                 </p>
+                <p class="fine">
+                  On a phone or tablet, analog touch controls appear automatically
+                  when play starts. They respect screen cutouts, support simultaneous
+                  steering and action buttons, and can be hidden from the in-game
+                  <strong>Controls</strong> button.
+                </p>
               </div>
 
               <div class="panel">
@@ -173,7 +179,8 @@
                     and challenge modes</strong> are playable.</li>
                   <li>Two-, three-, and four-player split-screen work with
                     additional controllers.</li>
-                  <li>The mouse is not used in-game; everything is keyboard or pad.</li>
+                  <li>The mouse is not used in-game; play with a keyboard, gamepad,
+                    or the automatic phone/tablet touch controls.</li>
                 </ul>
               </div>
             </div>
@@ -292,6 +299,48 @@
 <div id="stage" hidden>
   <canvas id="canvas" width="640" height="480" tabindex="-1"></canvas>
   <div id="fps" class="fps" hidden aria-hidden="true"></div>
+  <button id="touch-toggle" class="touch-toggle" type="button" hidden
+          aria-label="Hide touch controls" aria-pressed="true">
+    <span aria-hidden="true">◉</span><span class="touch-toggle-label">Controls</span>
+  </button>
+  <div id="touch-controls" class="touch-controls" role="group" hidden
+       aria-label="On-screen game controls">
+    <p class="touch-rotate-hint" role="status">
+      Turn your phone sideways for more room
+    </p>
+    <button class="touch-pause" type="button" data-touch-button="4096"
+            aria-label="Pause or start">Pause</button>
+
+    <div id="touch-stick" class="touch-stick" role="group"
+         aria-label="Analog steering stick">
+      <span class="touch-stick-ring" aria-hidden="true"></span>
+      <span id="touch-stick-knob" class="touch-stick-knob" aria-hidden="true"></span>
+      <span class="touch-stick-label" aria-hidden="true">Steer</span>
+    </div>
+
+    <div class="touch-actions" role="group" aria-label="Race controls">
+      <button class="touch-action touch-item" type="button"
+              data-touch-button="8192" aria-label="Use item">
+        <span>Item</span><small>Z</small>
+      </button>
+      <button class="touch-action touch-drift" type="button"
+              data-touch-button="16" aria-label="Hop or power-slide">
+        <span>Drift</span><small>R</small>
+      </button>
+      <button class="touch-action touch-brake" type="button"
+              data-touch-button="16384" aria-label="Brake or go back">
+        <span>Brake</span><small>B</small>
+      </button>
+      <button class="touch-action touch-go" type="button"
+              data-touch-button="32768" aria-label="Accelerate or select">
+        <span>Go</span><small>A</small>
+      </button>
+      <button class="touch-action touch-look" type="button"
+              data-touch-button="4" aria-label="Look behind">
+        <span>Look</span><small>C</small>
+      </button>
+    </div>
+  </div>
   <button id="fullscreen" class="fs-btn" type="button" title="Fullscreen (F)"
           aria-label="Enter fullscreen" aria-pressed="false">⛶</button>
 </div>
