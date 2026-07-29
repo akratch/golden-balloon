@@ -561,14 +561,21 @@ kbd {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Pause: DKR's HUD owns the top strip (position, lap, bananas, time), so the
+ * old top-center pill sat on the banana counter and needed a reach across
+ * the screen. Bottom-center is view-safe (road surface), one small thumb
+ * hop from either resting position, and mostly transparent at rest. */
 .touch-pause {
   position: fixed;
   left: 50%;
-  top: max(12px, env(safe-area-inset-top));
+  bottom: max(10px, env(safe-area-inset-bottom));
+  top: auto;
   transform: translateX(-50%);
-  min-width: 74px;
+  opacity: .42;
+  transition: opacity .16s;
+  min-width: 48px;
   min-height: 44px;
-  padding: 0 16px;
+  padding: 0 12px;
   border: 1px solid rgba(220, 235, 255, .34);
   border-radius: 999px;
   background: rgba(5, 22, 43, .62);
@@ -656,7 +663,12 @@ kbd {
   bottom: max(12px, calc(env(safe-area-inset-bottom) + 6px));
   width: calc(var(--touch-size) * 1.27);
   height: calc(var(--touch-size) * 1.08);
-  pointer-events: none;
+  /* The whole cluster box is a legitimate hit/capture target: a touch that
+   * lands in a gap still reaches the pad handler (nearest zone within reach
+   * accelerates — the pad IS the throttle), and pointer capture is requested
+   * against a hit-testable element. */
+  pointer-events: auto;
+  touch-action: none;
 }
 .touch-action {
   position: absolute;
@@ -689,7 +701,8 @@ kbd {
   box-shadow: 0 3px 10px rgba(0, 7, 22, .25),
               inset 0 1px 0 rgba(255, 255, 255, .48);
 }
-.touch-pause.is-pressed { transform: translateX(-50%) scale(.91); }
+.touch-pause.is-pressed { transform: translateX(-50%) scale(.91); opacity: 1; }
+.touch-pause:hover, .touch-pause:focus-visible { opacity: .9; }
 .touch-action.is-pressed small { color: rgba(36, 24, 8, .62); }
 .touch-action:focus-visible,
 .touch-pause:focus-visible {

@@ -480,7 +480,31 @@ function quiesceEnginePersistence(reason, done) {
 }
 
 // ---- Resume the AudioContext on a user gesture (autoplay policy) -----------
+// iOS additionally mutes Web Audio while the physical ring/silent switch is
+// on, because a bare AudioContext runs in the "ambient" audio session. The
+// documented escape (the unmute.js technique) is to play a silent MEDIA
+// element during a user gesture: media playback flips the session to
+// "playback", which ignores the ringer switch — and Web Audio rides along.
+let iosUnmuteElement = null;
+function iosUnmuteKick() {
+  try {
+    const iosLike = /iP(hone|ad|od)/.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    if (!iosLike) return;
+    if (!iosUnmuteElement) {
+      iosUnmuteElement = document.createElement("audio");
+      iosUnmuteElement.setAttribute("playsinline", "");
+      iosUnmuteElement.loop = true;
+      iosUnmuteElement.preload = "auto";
+      iosUnmuteElement.src = "data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
+    }
+    const attempt = iosUnmuteElement.play();
+    if (attempt && attempt.catch) attempt.catch(() => {});
+  } catch (_) {}
+}
+
 function resumeAudio() {
+  iosUnmuteKick();
   try {
     const ctx = module && module.SDL2 && module.SDL2.audioContext;
     if (ctx && ctx.state !== "running") ctx.resume().catch(() => {});
@@ -1202,25 +1226,24 @@ function wireTouchControls() {
     if (stickPointer !== null) return;
     event.preventDefault();
     stickPointer = event.pointerId;
+    // Capture is an optimization; the window-level tracking below owns the
+    // lifecycle (see the pad comment — Safari can decline capture, and a
+    // steering thumb that wanders off the stick must never freeze steering).
     try { stick.setPointerCapture(event.pointerId); } catch (_) {}
     stick.classList.add("is-active");
     updateStick(event);
   });
-  stick.addEventListener("pointermove", (event) => {
+  addEventListener("pointermove", (event) => {
     if (event.pointerId !== stickPointer) return;
     event.preventDefault();
     updateStick(event);
-  });
+  }, true);
   const endStick = (event) => {
     if (event.pointerId !== stickPointer) return;
-    event.preventDefault();
     resetStick();
   };
-  stick.addEventListener("pointerup", endStick);
-  stick.addEventListener("pointercancel", endStick);
-  stick.addEventListener("lostpointercapture", (event) => {
-    if (event.pointerId === stickPointer) resetStick();
-  });
+  addEventListener("pointerup", endStick, true);
+  addEventListener("pointercancel", endStick, true);
 
   // ---- The throttle pad: slide-to-chord ----------------------------------
   // Human-factors model: the action cluster IS the accelerator. Touching any
@@ -1287,6 +1310,13 @@ function wireTouchControls() {
       const zone = zoneAt(rects, event.clientX, event.clientY);
       if (!zone) return;
       event.preventDefault();
+      // Capture is an optimization only. Release correctness must NEVER
+      // depend on it: Safari declines capture in configurations Chrome
+      // accepts, and a declined capture meant a thumb that slid off its
+      // starting button hit-tested its pointerup into the canvas — the
+      // pad's handlers never saw it and the throttle latched forever
+      // (the shipped stuck-Go defect). The window-level tracking below is
+      // the authoritative lifecycle.
       try { actions.setPointerCapture(event.pointerId); } catch (_) {}
       pressedPointers.set(event.pointerId, {
         rects,
@@ -1297,22 +1327,28 @@ function wireTouchControls() {
       recomputeButtons();
       padVibrate(8, event.pointerType);
     });
-    actions.addEventListener("pointermove", (event) => {
-      const press = pressedPointers.get(event.pointerId);
-      if (!press || !press.rects) return;
-      const zone = zoneAt(press.rects, event.clientX, event.clientY);
-      if (!zone || zone.button === press.zone) return;
-      press.zone = zone.button;
-      press.bits = chordBits(zone.bit);
-      refreshButtonClasses();
-      recomputeButtons();
-      padVibrate(5, event.pointerType);
-    });
-    ["pointerup", "pointercancel", "lostpointercapture"].forEach((name) => {
-      actions.addEventListener(name, (event) =>
-        releaseButtonPointer(event.pointerId));
-    });
   }
+
+  // Authoritative pointer lifecycle: once a pad (or pause) pointer is down,
+  // its moves and its release are tracked at the WINDOW in the capture
+  // phase, so no hit-testing quirk, overlay boundary, or declined capture
+  // can ever eat the release. blur/pagehide/visibilitychange releaseAll
+  // remains the backstop.
+  addEventListener("pointermove", (event) => {
+    const press = pressedPointers.get(event.pointerId);
+    if (!press || !press.rects) return;
+    const zone = zoneAt(press.rects, event.clientX, event.clientY);
+    if (!zone || zone.button === press.zone) return;
+    press.zone = zone.button;
+    press.bits = chordBits(zone.bit);
+    refreshButtonClasses();
+    recomputeButtons();
+    padVibrate(5, event.pointerType);
+  }, true);
+  ["pointerup", "pointercancel"].forEach((name) => {
+    addEventListener(name, (event) =>
+      releaseButtonPointer(event.pointerId), true);
+  });
 
   actionButtons.forEach((button) => {
     const bit = Number(button.dataset.touchButton) >>> 0;
@@ -1324,10 +1360,7 @@ function wireTouchControls() {
         refreshButtonClasses();
         recomputeButtons();
         padVibrate(8, event.pointerType);
-      });
-      ["pointerup", "pointercancel", "lostpointercapture"].forEach((name) => {
-        button.addEventListener(name, (event) =>
-          releaseButtonPointer(event.pointerId));
+        // Release rides the window-level pointerup/pointercancel tracking.
       });
     }
     // Screen readers and switch controls may activate a button without Pointer
