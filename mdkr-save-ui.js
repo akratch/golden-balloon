@@ -118,7 +118,11 @@ globalThis.MDKRSaveUI = (() => {
     }
     return new Promise((resolve, reject) => {
       const script = document.createElement("script");
-      script.src = "mdkr-save-tools.js";
+      // Ride the same cache-busting stamp as the shell (set there from its
+      // own script URL): a stale save-tools wasm against a fresh shell is
+      // exactly the mix the stamp exists to prevent, on the one module that
+      // performs binary EEPROM interpretation.
+      script.src = "mdkr-save-tools.js" + (globalThis.__mdkrBuildQuery || "");
       script.onload = () => globalThis.createMDKRSaveTools
         ? resolve(globalThis.createMDKRSaveTools)
         : reject(new Error("save-tools loader did not define its module factory"));
@@ -169,7 +173,11 @@ globalThis.MDKRSaveUI = (() => {
 
   async function createRepository() {
     const factory = await loadFactory();
-    saveModule = await factory({ noInitialRun: true });
+    saveModule = await factory({
+      noInitialRun: true,
+      locateFile: (path, prefix) =>
+        (prefix || "") + path + (globalThis.__mdkrBuildQuery || ""),
+    });
     try { saveModule.FS.mkdir("/save"); } catch (_) {}
     saveModule.FS.mount(saveModule.IDBFS, {}, "/save");
     await syncFs(true);

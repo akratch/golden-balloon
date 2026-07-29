@@ -571,7 +571,10 @@ kbd {
   bottom: max(10px, env(safe-area-inset-bottom));
   top: auto;
   transform: translateX(-50%);
-  opacity: .42;
+  /* Paint and hit-test ABOVE the action cluster: in portrait the cluster box
+   * overlaps this spot, and a Pause tap must never read as throttle. */
+  z-index: 1;
+  opacity: .55;
   transition: opacity .16s;
   min-width: 48px;
   min-height: 44px;
@@ -702,7 +705,7 @@ kbd {
               inset 0 1px 0 rgba(255, 255, 255, .48);
 }
 .touch-pause.is-pressed { transform: translateX(-50%) scale(.91); opacity: 1; }
-.touch-pause:hover, .touch-pause:focus-visible { opacity: .9; }
+.touch-pause:hover, .touch-pause:focus-visible, .touch-pause:active { opacity: 1; }
 .touch-action.is-pressed small { color: rgba(36, 24, 8, .62); }
 .touch-action:focus-visible,
 .touch-pause:focus-visible {
@@ -743,8 +746,8 @@ kbd {
   aspect-ratio: 1;
 }
 .touch-look {
-  left: 28%;
-  top: 40%;
+  left: 30%;
+  top: 28%;
   width: 25%;
   /* Hold the 44px comfortable-touch floor a mid-race rear-view button
    * needs even at the smallest cluster size. */
@@ -774,12 +777,7 @@ kbd {
   text-align: center;
 }
 
-#stage.touch-ui-active .fs-btn {
-  top: max(12px, env(safe-area-inset-top));
-  right: max(12px, env(safe-area-inset-right));
-  bottom: auto;
-  opacity: .7;
-}
+/* (fs-btn relocation lives with the fullscreen rules above — one owner.) */
 #stage.touch-ui-active #canvas {
   touch-action: none;
 }

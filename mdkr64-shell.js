@@ -332,6 +332,7 @@ const BUILD_QUERY = (() => {
     return "";
   }
 })();
+globalThis.__mdkrBuildQuery = BUILD_QUERY;
 
 (async () => {
   try {
@@ -486,28 +487,60 @@ function quiesceEnginePersistence(reason, done) {
 // element during a user gesture: media playback flips the session to
 // "playback", which ignores the ringer switch — and Web Audio rides along.
 let iosUnmuteElement = null;
+let iosUnmuteDone = false;
 function iosUnmuteKick() {
   try {
     const iosLike = /iP(hone|ad|od)/.test(navigator.userAgent) ||
       (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
     if (!iosLike) return;
+    // Preferred, sanctioned path (Safari 16.4+): declare a playback audio
+    // session. Web Audio then ignores the ring/silent switch with NO media
+    // element involved. The legacy silent-element trick below is only the
+    // fallback for older iOS — and it must NOT loop: a persistently playing
+    // media element drags the whole session through the media pipeline's
+    // large HAL buffers, which is exactly the "huge audio delay" failure.
+    if (iosUnmuteDone) return;
+    if (navigator.audioSession) {
+      try {
+        if (navigator.audioSession.type !== "playback") {
+          navigator.audioSession.type = "playback";
+        }
+        // Verify the engine actually accepted it; a silently-ignored write
+        // must fall through to the element fallback.
+        if (navigator.audioSession.type === "playback") {
+          iosUnmuteDone = true;
+          return;
+        }
+      } catch (_) {}
+    }
     if (!iosUnmuteElement) {
       iosUnmuteElement = document.createElement("audio");
       iosUnmuteElement.setAttribute("playsinline", "");
-      iosUnmuteElement.loop = true;
+      iosUnmuteElement.loop = false;
       iosUnmuteElement.preload = "auto";
       iosUnmuteElement.src = "data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
     }
     const attempt = iosUnmuteElement.play();
-    if (attempt && attempt.catch) attempt.catch(() => {});
+    if (attempt && attempt.then) {
+      attempt.then(() => { iosUnmuteDone = true; }, () => {});
+    }
   } catch (_) {}
 }
 
+let audioLatencyLogged = false;
 function resumeAudio() {
   iosUnmuteKick();
   try {
     const ctx = module && module.SDL2 && module.SDL2.audioContext;
     if (ctx && ctx.state !== "running") ctx.resume().catch(() => {});
+    if (ctx && ctx.state === "running" && !audioLatencyLogged) {
+      audioLatencyLogged = true;
+      console.info(
+        "[audio] rate=" + ctx.sampleRate +
+        " baseLatency=" + (ctx.baseLatency != null ? ctx.baseLatency.toFixed(3) : "?") +
+        " outputLatency=" + (ctx.outputLatency != null ? ctx.outputLatency.toFixed(3) : "?") +
+        (navigator.audioSession ? " session=" + navigator.audioSession.type : ""));
+    }
   } catch (e) {}
 }
 
@@ -522,8 +555,19 @@ const MAX_PIXELS = 2560 * 1440;
 
 function sizeCanvas() {
   const canvas = $("canvas");
-  const vw = Math.max(320, window.innerWidth);
-  const vh = Math.max(240, window.innerHeight);
+  // Prefer the visual viewport: iOS (especially standalone/home-screen
+  // launches) can report a stale layout innerHeight until a rotation, while
+  // visualViewport tracks the real visible area. The inline pixel styles set
+  // below override the stylesheet, so THIS measurement is the layout.
+  // Only trust the visual viewport at rest (scale ~1): during a pinch it
+  // reports the zoomed region, and resizing the engine per pinch frame would
+  // churn the render for an accidental gesture.
+  const vv = window.visualViewport;
+  const vvAtRest = vv && Math.abs((vv.scale || 1) - 1) < 0.001;
+  const rawW = (vvAtRest && vv.width) || window.innerWidth;
+  const rawH = (vvAtRest && vv.height) || window.innerHeight;
+  const vw = Math.max(320, Math.round(rawW));
+  const vh = Math.max(240, Math.round(rawH));
   const cssW = vw, cssH = vh;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   let bw = Math.round(cssW * dpr), bh = Math.round(cssH * dpr);
@@ -553,13 +597,82 @@ function scheduleCanvasResize() {
     if (module) {
       module.__mdkrCanvasSize = [dim.bw, dim.bh];
     }
+    // A layout change moves the touch cluster (URL-bar collapse, settle,
+    // rotation): re-measure the zone rects of any press in flight so slides
+    // keep scoring against where the buttons actually are.
+    if (globalThis.__mdkrRefreshPressRects) globalThis.__mdkrRefreshPressRects();
   });
+}
+
+// iOS can settle its real viewport (status bar, home indicator, standalone
+// chrome) shortly after launch or an orientation change WITHOUT firing any
+// resize event — the shipped symptom was a short canvas with the page
+// background showing beneath it until a rotation forced the event chain.
+// After every lifecycle edge, poll the measured viewport each frame for a
+// bounded window and re-drive the resize when it moves. Cheap (a few reads
+// per frame for ~2s) and categorical: no "missing event" can strand the
+// layout again.
+let viewportSettleUntil = 0;
+let viewportSettleFrame = 0;
+function viewportSignature() {
+  const vv = window.visualViewport;
+  return [
+    window.innerWidth, window.innerHeight,
+    vv ? Math.round(vv.width) : 0, vv ? Math.round(vv.height) : 0,
+    window.devicePixelRatio || 1,
+  ].join("x");
+}
+function armViewportSettleWatch(durationMs) {
+  viewportSettleUntil = Math.max(
+    viewportSettleUntil, performance.now() + (durationMs || 2000));
+  if (viewportSettleFrame) return;
+  let last = viewportSignature();
+  const tick = () => {
+    viewportSettleFrame = 0;
+    const now = performance.now();
+    const sig = viewportSignature();
+    if (sig !== last) {
+      last = sig;
+      scheduleCanvasResize();
+      // A move restarts the window: settle means "stable", not "timer ran out
+      // mid-transition".
+      viewportSettleUntil = Math.max(viewportSettleUntil, now + 700);
+    }
+    if (now < viewportSettleUntil) {
+      viewportSettleFrame = requestAnimationFrame(tick);
+    }
+  };
+  viewportSettleFrame = requestAnimationFrame(tick);
 }
 
 function wireCanvasResize() {
   addEventListener("resize", scheduleCanvasResize, { passive: true });
-  addEventListener("orientationchange", scheduleCanvasResize, { passive: true });
-  document.addEventListener("fullscreenchange", scheduleCanvasResize);
+  addEventListener("orientationchange", () => {
+    scheduleCanvasResize();
+    armViewportSettleWatch(2500);
+  }, { passive: true });
+  document.addEventListener("fullscreenchange", () => {
+    scheduleCanvasResize();
+    armViewportSettleWatch(2000);
+  });
+  // The visual viewport fires on iOS in cases the window does not (chrome
+  // collapse, standalone settle, pinch state changes).
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener(
+      "resize", scheduleCanvasResize, { passive: true });
+    window.visualViewport.addEventListener(
+      "scroll", scheduleCanvasResize, { passive: true });
+  }
+  addEventListener("pageshow", () => armViewportSettleWatch(2000));
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") armViewportSettleWatch(1500);
+  });
+  if (screen.orientation && screen.orientation.addEventListener) {
+    screen.orientation.addEventListener("change", () => {
+      scheduleCanvasResize();
+      armViewportSettleWatch(2500);
+    });
+  }
   if (typeof ResizeObserver !== "undefined") {
     // Retain the observer for the lifetime of the page. Relying on the browser's
     // target-registration internals to keep an otherwise-unreferenced observer
@@ -567,6 +680,9 @@ function wireCanvasResize() {
     canvasResizeObserver = new ResizeObserver(scheduleCanvasResize);
     canvasResizeObserver.observe($("stage"));
   }
+  // Cover the launch transient itself (standalone boots measure wrong for the
+  // first few hundred ms on iOS).
+  armViewportSettleWatch(3000);
 }
 
 // ---- Boot ------------------------------------------------------------------
@@ -770,6 +886,7 @@ async function boot() {
   // Show the game view and run.
   $("gate").hidden = true;
   $("stage").hidden = false;
+  armViewportSettleWatch(2500);
   canvas.focus();
   status.textContent = "";
   const mainArgs = ["--rom", ROM_PATH];
@@ -1276,8 +1393,14 @@ function wireTouchControls() {
       rect: button.getBoundingClientRect(),
     }));
   }
+  globalThis.__mdkrRefreshPressRects = () => {
+    pressedPointers.forEach((press) => {
+      if (press.rects) press.rects = padRects();
+    });
+  };
 
-  function zoneAt(rects, x, y) {
+  function zoneAt(rects, x, y, reach) {
+    const limit = reach == null ? 14 : reach;
     let best = null;
     let bestScore = Infinity;
     for (const entry of rects) {
@@ -1285,7 +1408,7 @@ function wireTouchControls() {
       const dx = x < r.left ? r.left - x : (x > r.right ? x - r.right : 0);
       const dy = y < r.top ? r.top - y : (y > r.bottom ? y - r.bottom : 0);
       const outside = Math.max(dx, dy);
-      if (outside > 14) continue;
+      if (outside > limit) continue;
       const cx = x - (r.left + r.right) / 2;
       const cy = y - (r.top + r.bottom) / 2;
       // Strictly-inside beats padded reach; ties resolve to nearest center.
@@ -1307,7 +1430,10 @@ function wireTouchControls() {
   if (actions) {
     actions.addEventListener("pointerdown", (event) => {
       const rects = padRects();
-      const zone = zoneAt(rects, event.clientX, event.clientY);
+      // Any touch inside the cluster box engages the nearest zone: the box
+      // IS the pad, and an inert patch would swallow the tap (the box is a
+      // hit target so it never falls through to the canvas).
+      const zone = zoneAt(rects, event.clientX, event.clientY, Infinity);
       if (!zone) return;
       event.preventDefault();
       // Capture is an optimization only. Release correctness must NEVER
@@ -1367,13 +1493,14 @@ function wireTouchControls() {
     // Events. Hold it long enough to cross at least one authored 30 Hz sample.
     button.addEventListener("click", (event) => {
       if (event.detail !== 0) return;
+      const pulseBits = bit === N64_PAUSE ? bit : chordBits(bit);
       const priorTimer = pulseTimers.get(bit);
       if (priorTimer) clearTimeout(priorTimer);
-      accessibilityButtons |= bit;
+      accessibilityButtons |= pulseBits;
       button.classList.add("is-pressed");
       recomputeButtons();
       pulseTimers.set(bit, setTimeout(() => {
-        accessibilityButtons &= ~bit;
+        accessibilityButtons &= ~pulseBits;
         pulseTimers.delete(bit);
         refreshButtonClasses();
         recomputeButtons();
