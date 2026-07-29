@@ -34,11 +34,11 @@ const DKR_ROM_SIZE = 12 * 1024 * 1024; // 0xC00000 — every DKR revision
 // MIRRORS the kDkrRevisions table in platform/rom_id.c — keep the two identical;
 // tests/check_rom_revision.py fails if they drift.
 const DKR_REVISIONS = [
-  { name: "US 1.0 (NTSC-U, Rev 0)",    build: "us.v77",  country: "E", revision: 0x0, crc1: 0x53D440E7, crc2: 0x7519B011, lutStart: 0x0ECB60, lutEnd: 0x0ECC30, supported: false },
-  { name: "European (PAL, Rev 0)",     build: "pal.v77", country: "P", revision: 0x0, crc1: 0xFD73F775, crc2: 0x9724755A, lutStart: 0x0ECBF0, lutEnd: 0x0ECCC0, supported: false },
-  { name: "Japanese (NTSC-J)",         build: "jpn.v79", country: "J", revision: 0x0, crc1: 0x7435C9BB, crc2: 0x39763CF4, lutStart: 0x0EE5D0, lutEnd: 0x0EE6A0, supported: false },
-  { name: "US 1.1 (NTSC-U, Rev 1)",    build: "us.v80",  country: "E", revision: 0x1, crc1: 0xE402430D, crc2: 0xD2FCFC9D, lutStart: 0x0ED0E0, lutEnd: 0x0ED1B0, supported: true  },
-  { name: "European 1.1 (PAL, Rev 1)", build: "pal.v80", country: "P", revision: 0x1, crc1: 0x596E145B, crc2: 0xF7D9879F, lutStart: 0x0ED170, lutEnd: 0x0ED240, supported: true  },
+  { name: "US 1.0 (NTSC-U, Rev 0)",    build: "us.v77",  country: "E", revision: 0x0, crc1: 0x53D440E7, crc2: 0x7519B011, lutStart: 0x0ECB60, lutEnd: 0x0ECC30, romEnd: 0xAC9630, supported: false },
+  { name: "European (PAL, Rev 0)",     build: "pal.v77", country: "P", revision: 0x0, crc1: 0xFD73F775, crc2: 0x9724755A, lutStart: 0x0ECBF0, lutEnd: 0x0ECCC0, romEnd: 0xAC96C0, supported: false },
+  { name: "Japanese (NTSC-J)",         build: "jpn.v79", country: "J", revision: 0x0, crc1: 0x7435C9BB, crc2: 0x39763CF4, lutStart: 0x0EE5D0, lutEnd: 0x0EE6A0, romEnd: 0xB8E4E0, supported: false },
+  { name: "US 1.1 (NTSC-U, Rev 1)",    build: "us.v80",  country: "E", revision: 0x1, crc1: 0xE402430D, crc2: 0xD2FCFC9D, lutStart: 0x0ED0E0, lutEnd: 0x0ED1B0, romEnd: 0xB8CFD0, supported: true  },
+  { name: "European 1.1 (PAL, Rev 1)", build: "pal.v80", country: "P", revision: 0x1, crc1: 0x596E145B, crc2: 0xF7D9879F, lutStart: 0x0ED170, lutEnd: 0x0ED240, romEnd: 0xB8D060, supported: true  },
 ];
 
 // "US 1.1 (NTSC-U, Rev 1) (us.v80) and European 1.1 (PAL, Rev 1) (pal.v80)"
@@ -95,7 +95,7 @@ function dkrNormalizeByteOrder(bytes) {
 function dkrIdentifyRom(bytes) {
   const id = {
     verdict: "not-dkr", revisionName: null, decompBuild: null,
-    refCrc1: 0, refCrc2: 0,
+    refCrc1: 0, refCrc2: 0, romEnd: 0,
     gameCode: "", title: "", version: 0, crc1: 0, crc2: 0, matchedByCrc: false,
   };
   if (!bytes || bytes.length < 0x40) return id;
@@ -139,6 +139,7 @@ function dkrIdentifyRom(bytes) {
   id.decompBuild = row.build;
   id.refCrc1 = row.crc1;
   id.refCrc2 = row.crc2;
+  id.romEnd = row.romEnd;
   id.verdict = row.supported ? "supported" : "other-revision";
   return id;
 }

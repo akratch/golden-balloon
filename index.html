@@ -169,9 +169,10 @@
                   <li>Needs <strong>WebGPU</strong> — Chrome or Edge 113+. There is no
                     WebGL fallback, so this page says so up front rather than
                     running black.</li>
-                  <li><strong>Tracks</strong> and <strong>Time Trial</strong> are the
-                    solid path today. Adventure mode is still being wired up.</li>
-                  <li>Two-player split-screen works with a second controller.</li>
+                  <li><strong>Adventure, Tracks, Time Trial, bosses, trophy series,
+                    and challenge modes</strong> are playable.</li>
+                  <li>Two-, three-, and four-player split-screen work with
+                    additional controllers.</li>
                   <li>The mouse is not used in-game; everything is keyboard or pad.</li>
                 </ul>
               </div>
@@ -184,11 +185,15 @@
           <div class="panel">
             <h3 id="known-title">Known issues</h3>
             <ul class="notes">
-              <li><strong>Boss races are incomplete.</strong> Reaching one is possible;
-                a fall-through on the volcano climb is being fixed.</li>
-              <li><strong>Adventure mode</strong> drives hub → race → hub, but winning a
-                race (the balloon cutscene) is not validated yet.</li>
-              <li><strong>Challenge modes and 3–4 player</strong> are not implemented.</li>
+              <li><strong>Controller Pak backup uses mdkr64's versioned
+                <code>.mdkr-paks</code> bundle.</strong> Import of raw emulator
+                <code>.mpk</code> images is not available yet.</li>
+              <li><strong>Rumble support depends on the browser and controller.</strong>
+                Devices without a Web Gamepad vibration actuator play normally
+                without feedback.</li>
+              <li><strong>Video Options</strong> are available from the in-game
+                Options menu. Aspect, FOV, and supersampling apply immediately;
+                cache-wide presentation changes clearly request a restart.</li>
               <li>Found something? A browser console trace is genuinely useful —
                 the wasm offsets in it map straight back to function names.
                 <a href="https://github.com/akratch/golden-balloon/issues">Open an
@@ -206,19 +211,41 @@
           <div class="panel">
             <h3 id="data-title">Stored data</h3>
             <p class="fine">
-              This page keeps two things in your browser, and nothing anywhere
-              else: the ROM you picked, and your saved progress (Adventure files,
-              lap records, options). Each clears on its own.
+              Browser storage can be cleared by browser settings, private mode,
+              storage eviction, or a site reset. Download a backup if the
+              progress matters to you. Save files and ROMs stay on this device
+              and are never uploaded.
             </p>
             <div class="actions">
+              <button id="download-save" class="btn btn-primary">
+                <span>Download backup</span>
+              </button>
+              <button id="download-save-raw" class="btn btn-ghost">Download raw EEPROM</button>
+              <button id="download-paks" class="btn btn-ghost">Download ghost Paks</button>
+              <button id="import-paks-button" class="btn btn-ghost">Import ghost Paks</button>
+              <input id="import-paks-input" type="file"
+                     accept=".mdkr-paks,application/json"
+                     hidden>
+              <button id="import-save-button" class="btn btn-ghost">Import backup</button>
+              <input id="import-save-input" type="file"
+                     accept=".mdkr-save,.eep,.bin,.sav,application/json"
+                     hidden>
+              <button id="edit-save" class="btn btn-ghost">Edit saved progress</button>
+              <button id="restore-save-snapshot" class="btn btn-ghost">Recovery points</button>
               <button id="clear-save" class="btn btn-danger">Erase saved progress</button>
+            </div>
+            <div id="save-drop" class="save-drop" tabindex="0" role="button"
+                 aria-label="Drop a save backup here">
+              Drop a <code>.mdkr-save</code> backup or exact 512-byte EEPROM here
             </div>
             <p id="save-status" role="status" aria-live="polite"></p>
             <p class="fine">
-              Erasing progress is destructive and asks first. It does not touch
-              your ROM — use <em>Forget stored ROM</em> up in step&nbsp;01 for
-              that. If the game ever boots into a broken state that survives a
-              reload, this is the button that fixes it.
+              Adventure progress and Controller Pak ghosts are stored
+              separately; use both backup buttons if both matter. Import and
+              editing use a rollback transaction: the candidate is
+              staged, persisted, reloaded, and checked byte-for-byte before it
+              becomes live. The game also retains three checksum-safe automatic
+              snapshots. Corrupt blocks are never repaired silently.
             </p>
           </div>
         </section>
@@ -246,15 +273,27 @@
   </div>
 </main>
 
+<dialog id="save-dialog" aria-labelledby="save-dialog-title">
+  <div class="save-dialog-head">
+    <h2 id="save-dialog-title">Manage saved progress</h2>
+    <button id="save-dialog-close" class="btn btn-ghost" type="button"
+            aria-label="Close save manager">Close</button>
+  </div>
+  <div id="save-dialog-body"></div>
+  <p id="save-dialog-status" role="status" aria-live="polite"></p>
+  <div id="save-dialog-actions" class="actions"></div>
+</dialog>
+
 <!-- ================= GAME ================= -->
 <!-- The canvas id MUST stay "#canvas" — it is the WebGPU surface selector in
      gfx_webgpu_compat.h and the SDL2 canvas the shell binds to. Its backing
-     store is sized by the shell BEFORE boot, because the engine reads the
-     drawable size once at gfx_init and renders natively at that resolution. -->
+     store is sized by the shell before boot and after every live resize; the
+     engine samples it each frame and transactionally resizes its targets. -->
 <div id="stage" hidden>
   <canvas id="canvas" width="640" height="480" tabindex="-1"></canvas>
   <div id="fps" class="fps" hidden aria-hidden="true"></div>
-  <button id="fullscreen" class="fs-btn" title="Fullscreen (F)" aria-label="Fullscreen">⛶</button>
+  <button id="fullscreen" class="fs-btn" type="button" title="Fullscreen (F)"
+          aria-label="Enter fullscreen" aria-pressed="false">⛶</button>
 </div>
 
 <div id="save-banner" role="status" aria-live="polite" hidden>
@@ -264,6 +303,7 @@
 <!-- rom-id.js MUST come first: the shell calls dkrValidateRom() from it. It is the
      browser mirror of platform/rom_id.c (revision table + byte-order fix-up). -->
 <script src="rom-id.js"></script>
+<script src="mdkr-save-ui.js"></script>
 <script src="mdkr64-shell.js"></script>
 </body>
 </html>

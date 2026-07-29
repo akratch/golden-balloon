@@ -56,10 +56,46 @@ function testError(value) {
   if (testState.errors.length > 32) testState.errors.shift();
 }
 
+// Called synchronously by the wasm WebGPU seam when device bring-up or a live
+// device fails. Keep recovery outside the renderer: expose the launcher (and
+// its independent Clear Save / Forget ROM controls), hide the frozen canvas,
+// and give the player a stable, actionable message instead of a black frame.
+let graphicsRecoveryQueued = false;
+window.mdkr64ShowError = (message) => {
+  const text = String(
+    message || "The graphics device stopped. Reload the page to try again."
+  );
+  testError(text);
+  testMark("graphics-failed");
+  $("stage").hidden = true;
+  $("gate").hidden = false;
+  const status = $("gate-msg");
+  status.className = "status-line err";
+  status.textContent = text;
+  const play = $("play");
+  play.disabled = true;
+  play.title = text;
+  /*
+   * Asyncify's callMain() can return at its first unwind and never deliver the
+   * ordinary onExit callback for an initialization failure. Explicitly finish
+   * the engine's persistence generation, then hand /save back to the
+   * ROM-independent recovery module. This keeps Clear Save/import/export
+   * usable on the exact screen reached when the engine cannot render.
+   */
+  if (!graphicsRecoveryQueued) {
+    graphicsRecoveryQueued = true;
+    quiesceEnginePersistence("graphics-failure", () => {
+      if (globalThis.MDKRSaveUI) {
+        globalThis.MDKRSaveUI.resume();
+      }
+    });
+  }
+};
+
 // FNV-1a is not a security hash; it is a compact reload oracle for the 512-byte
 // EEPROM. Never fingerprint the ROM here: the browser check only records that
 // the expected private file exists and has the legal 12 MiB size.
-function testFileInfo(path, includeHash) {
+function testFileInfo(path, includeHash, includeBytes = false) {
   if (!module || !module.FS) return { exists: false, size: 0, hash: null };
   try {
     const bytes = module.FS.readFile(path);
@@ -72,7 +108,12 @@ function testFileInfo(path, includeHash) {
       }
       hash = value.toString(16).padStart(8, "0");
     }
-    return { exists: true, size: bytes.length, hash };
+    return {
+      exists: true,
+      size: bytes.length,
+      hash,
+      bytes: includeBytes ? Array.from(bytes) : undefined,
+    };
   } catch (e) {
     return { exists: false, size: 0, hash: null };
   }
@@ -88,12 +129,19 @@ function testAudioInfo() {
     ring: Number(audio.statRing) || 0,
     underflows: Number(audio.under) || 0,
     contextState: audio.ctx ? String(audio.ctx.state) : "missing",
+    shutdownComplete: audio.shutdownComplete === true,
   };
 }
 
 function testRefreshExitState() {
   if (!testState || !module || testState.phase !== "main-started") return;
-  if (Number.isInteger(module.__mdkrExitCode)) {
+  /*
+   * __mdkrExitCode is published when a frame requests termination. That is
+   * deliberately earlier than renderer/audio/platform teardown. Only the
+   * post-teardown flag proves C main actually unwound through every owner.
+   */
+  if (Number.isInteger(module.__mdkrExitCode) &&
+      module.__mdkrShutdownComplete === true) {
     testState.exitCode = module.__mdkrExitCode;
     testMark("exited");
   }
@@ -109,8 +157,20 @@ if (testState) {
       errors: testState.errors.slice(),
       frames: module && Number.isFinite(module.__mdkrFrames)
         ? module.__mdkrFrames : 0,
+      exitRequested: module && module.__mdkrExitRequested === true,
+      shutdownComplete: module && module.__mdkrShutdownComplete === true,
       rom: testFileInfo(ROM_PATH, false),
       save: testFileInfo("/save/eeprom.bin", true),
+      videoConfig: testFileInfo("/save/mdkr64.ini", false),
+      saveRecovery: {
+        previous: testFileInfo("/save/eeprom.bin.previous", true),
+        automatic: [1, 2, 3].map((index) =>
+          testFileInfo(`/save/eeprom.bin.autosave.${index}`, true, true)),
+      },
+      saveDurability: module && module.__mdkrSaveDurability
+        ? { ...module.__mdkrSaveDurability } : null,
+      persistenceWait: testState.persistenceWait
+        ? { ...testState.persistenceWait } : null,
       audio: testAudioInfo(),
     };
   };
@@ -165,6 +225,8 @@ function validateRom(bytes, name) {
 // from the URL so a shared link opens on the same settings.
 const PREF_MODE = "mdkr64.mode";
 const PREF_SCALE = "mdkr64.scale";
+let qualityModeDirty = false;
+let qualityScaleDirty = false;
 function initQualityControls() {
   const qsp = new URLSearchParams(location.search);
   const mode = $("mode");
@@ -176,7 +238,9 @@ function initQualityControls() {
     if (m && [...mode.options].some((o) => o.value === m)) mode.value = m;
     if (s !== null && [...scale.options].some((o) => o.value === s)) scale.value = s;
   } catch (_) { /* private mode: fall back to the defaults in the markup */ }
-  const save = () => {
+  const save = (event) => {
+    if (event && event.currentTarget === mode) qualityModeDirty = true;
+    if (event && event.currentTarget === scale) qualityScaleDirty = true;
     try {
       localStorage.setItem(PREF_MODE, mode.value);
       localStorage.setItem(PREF_SCALE, scale.value);
@@ -184,6 +248,51 @@ function initQualityControls() {
   };
   mode.addEventListener("change", save);
   scale.addEventListener("change", save);
+}
+
+function parseIniSection(text, wantedSection) {
+  const values = new Map();
+  let section = "";
+  for (const rawLine of String(text).split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#") || line.startsWith(";")) continue;
+    const sectionMatch = /^\[([^\]]+)\]$/.exec(line);
+    if (sectionMatch) {
+      section = sectionMatch[1].trim().toLowerCase();
+      continue;
+    }
+    const equals = line.indexOf("=");
+    if (section !== wantedSection.toLowerCase() || equals <= 0) continue;
+    values.set(
+      line.slice(0, equals).trim().toLowerCase(),
+      line.slice(equals + 1).trim()
+    );
+  }
+  return values;
+}
+
+function applyStoredVideoControls(qs) {
+  if (!module || !module.FS) return false;
+  let text;
+  try {
+    text = module.FS.readFile("/save/mdkr64.ini", {encoding: "utf8"});
+  } catch (_) {
+    return false;
+  }
+  const mode = $("mode");
+  const scale = $("scale");
+  const video = parseIniSection(text, "video");
+  const storedMode = (video.get("mode") || "").toLowerCase();
+  const storedScale = video.get("renderscale") || "";
+  if (mode && !qualityModeDirty && !qs.has("mode") &&
+      /^(pure|restored|remastered)$/.test(storedMode)) {
+    mode.value = storedMode;
+  }
+  if (scale && !qualityScaleDirty && !qs.has("scale") &&
+      /^[1-4](?:\.0+)?$/.test(storedScale)) {
+    scale.value = String(Math.trunc(Number(storedScale)));
+  }
+  return true;
 }
 
 // ---- Engine factory (loads mdkr64_web.js, which defines createMDKR64) -------
@@ -201,53 +310,118 @@ function loadEngineFactory() {
 }
 
 // ---- Persist saves (IDBFS -> IndexedDB) ------------------------------------
-// FS.syncfs is not reentrant, and there used to be TWO independent coalescers in
-// this page: this one, and the engine's own EM_ASM after every EEPROM write
-// (platform/stubs_dkr.c), which guarded on Module.__mdkrSyncing. Neither knew
-// about the other, so the 5-second timer below could start a sync while an
-// EEPROM-write sync was still in flight. There is now exactly ONE: this
-// function is installed as Module.__mdkrPersist and the engine calls it, so
-// every sync in the page — timer, pagehide, EEPROM write, save wipe — queues
-// behind the same flag and reports errors in the same place.
-let syncing = false, syncAgain = false, persistError = null;
-let persistWaiters = [];
+// A save call now has completion semantics: its Promise resolves only after a
+// sync that began after that call. The wasm EEPROM seam awaits this Promise via
+// Asyncify, so a race result cannot be followed by more simulation while its
+// browser transaction is merely queued. A single Promise chain also makes
+// syncfs non-reentrancy structural rather than flag-dependent.
+let persistRequested = 0;
+let persistCommitted = 0;
+let persistTail = Promise.resolve();
+let enginePersistenceActive = true;
+let persistenceTimer = null;
 
-function finishPersistWaiters(err) {
-  const waiters = persistWaiters;
-  persistWaiters = [];
-  for (const done of waiters) {
-    try { done(err || null); } catch (e) {}
-  }
+function publishDurability(error = null) {
+  if (!module) return;
+  module.__mdkrSaveDurability = {
+    requested: persistRequested,
+    committed: persistCommitted,
+    pending: Math.max(0, persistRequested - persistCommitted),
+    lastError: error ? String(error.message || error).slice(0, 500) : null,
+  };
 }
 
-function persist(done) {
-  if (done) persistWaiters.push(done);
-  if (!module || !module.FS) { finishPersistWaiters(null); return; }
-  if (syncing) { syncAgain = true; return; }
-  syncing = true;
-  try {
-    module.FS.syncfs(false, (err) => {
-      syncing = false;
-      if (err) {
-        persistError = persistError || err;
-        $("save-banner").hidden = false;
-      }
-      else { savedOnce = true; }
-      if (syncAgain) {
-        syncAgain = false;
-        persist();
-        return;
-      }
-      const finalError = persistError;
-      persistError = null;
-      finishPersistWaiters(finalError);
-    });
-  } catch (e) {
-    syncing = false;
-    syncAgain = false;
-    persistError = null;
-    finishPersistWaiters(e);
+async function syncEngineFs(options) {
+  if (testConfig && options && options.reason === "eeprom") {
+    const delay = Number(testConfig.persistDelayOnceMs) || 0;
+    const currentFrame = module && Number.isFinite(module.__mdkrFrames)
+      ? module.__mdkrFrames : 0;
+    if (delay > 0 && currentFrame > 0) {
+      testConfig.persistDelayOnceMs = 0;
+      const started = performance.now();
+      const startFrame = currentFrame;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      const endFrame = module && Number.isFinite(module.__mdkrFrames)
+        ? module.__mdkrFrames : 0;
+      testState.persistenceWait = {
+        requestedMs: delay,
+        elapsedMs: performance.now() - started,
+        startFrame,
+        endFrame,
+      };
+    }
   }
+  return new Promise((resolve, reject) => {
+    if (!module || !module.FS) {
+      resolve();
+      return;
+    }
+    try {
+      module.FS.syncfs(false, (error) =>
+        error ? reject(error) : resolve());
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+function persist(optionsOrDone) {
+  const done = typeof optionsOrDone === "function" ? optionsOrDone : null;
+  const options = optionsOrDone && typeof optionsOrDone === "object"
+    ? optionsOrDone : null;
+  if (!enginePersistenceActive) {
+    const settled = persistTail.catch(() => {});
+    if (done) settled.then(() => done(null), (error) => done(error));
+    return settled;
+  }
+  const generation = ++persistRequested;
+  publishDurability();
+  const run = persistTail.catch(() => {}).then(async () => {
+    await syncEngineFs(options);
+    persistCommitted = Math.max(persistCommitted, generation);
+    savedOnce = true;
+    const banner = $("save-banner");
+    if (banner) banner.hidden = true;
+    publishDurability();
+    return generation;
+  });
+  persistTail = run;
+  if (done) {
+    run.then(() => done(null), (error) => done(error));
+  }
+  run.catch((error) => {
+    const banner = $("save-banner");
+    if (banner) banner.hidden = false;
+    publishDurability(error);
+  });
+  return run;
+}
+
+function quiesceEnginePersistence(reason, done) {
+  if (!enginePersistenceActive) {
+    persistTail.then(
+      () => { if (done) done(null); },
+      (error) => { if (done) done(error); }
+    );
+    return persistTail;
+  }
+  if (persistenceTimer !== null) {
+    clearInterval(persistenceTimer);
+    persistenceTimer = null;
+  }
+  /*
+   * Enqueue one final generation while the engine still owns /save, then close
+   * the producer side immediately. The Promise chain preserves every earlier
+   * EEPROM generation; later timer/pagehide callbacks become read-only waits
+   * and cannot reinstall stale files after the recovery module erases them.
+   */
+  const finalFlush = persist({reason, urgent: true});
+  enginePersistenceActive = false;
+  finalFlush.then(
+    () => { if (done) done(null); },
+    (error) => { if (done) done(error); }
+  );
+  return finalFlush;
 }
 
 // ---- Resume the AudioContext on a user gesture (autoplay policy) -----------
@@ -320,6 +494,12 @@ function wireCanvasResize() {
 async function boot() {
   if (booted) return;
   booted = true;
+  // The tiny save-tools module and the engine each have their own in-memory FS
+  // view of the same IDBFS database. Hand ownership to the engine only after
+  // save tooling has flushed and stopped mutating its view.
+  if (globalThis.MDKRSaveUI) {
+    await globalThis.MDKRSaveUI.release();
+  }
   testMark("boot-started");
   const canvas = $("canvas");
   const status = $("gate-msg");
@@ -416,14 +596,32 @@ async function boot() {
         $("play").disabled = false;
         booted = false;
       }
+      // main() is no longer mutating IDBFS. Flush the engine view before the
+      // launcher save module reacquires the store, so post-run backup/recovery
+      // controls observe the exact final EEPROM.
+      quiesceEnginePersistence("engine-exit", () => {
+        if (globalThis.MDKRSaveUI) {
+          globalThis.MDKRSaveUI.resume();
+        }
+      });
     },
     onAbort: (reason) => {
       if (testState) {
         testState.abortReason = String(reason == null ? "abort" : reason);
         testMark("aborted");
       }
-      status.textContent = "The engine crashed — reload to continue from your last save.";
-      persist();
+      const text =
+        "The engine crashed — reload to continue from your last persisted save.";
+      status.className = "status-line err";
+      status.textContent = text;
+      $("stage").hidden = true;
+      $("gate").hidden = false;
+      $("play").disabled = true;
+      quiesceEnginePersistence("engine-abort", () => {
+        if (globalThis.MDKRSaveUI) {
+          globalThis.MDKRSaveUI.resume();
+        }
+      });
     },
   });
   if (testState) testState.module = module;
@@ -446,6 +644,7 @@ async function boot() {
 
   const storedRomBeforeWrite = testFileInfo(ROM_PATH, false);
   const saveBeforeMain = testFileInfo("/save/eeprom.bin", true);
+  const hasStoredVideoConfig = applyStoredVideoControls(qs);
 
   // Write the freshly-picked ROM (if any) and persist it for next visit.
   let pickedRomWritten = false;
@@ -464,10 +663,19 @@ async function boot() {
 
   // The engine's post-EEPROM-write sync calls this, so the whole page shares one
   // in-flight sync (see the comment on persist()).
-  module.__mdkrPersist = () => persist();
+  module.__mdkrPersist = (options) => persist(options);
+  module.__mdkrPersistFailed = (message) => {
+    const banner = $("save-banner");
+    if (banner) {
+      banner.hidden = false;
+      banner.textContent =
+        "Couldn't save to browser storage — the game will keep retrying. " +
+        String(message || "").slice(0, 300);
+    }
+  };
 
   // Arm persistence + audio-resume gestures (once).
-  setInterval(persist, 5000);
+  persistenceTimer = setInterval(persist, 5000);
   addEventListener("pagehide", persist);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") persist();
@@ -483,17 +691,24 @@ async function boot() {
   status.textContent = "";
   const mainArgs = ["--rom", ROM_PATH];
 
-  // Presentation mode + supersampling. The picker persists the choice; a URL
-  // parameter overrides it so a comparison can be linked directly
-  // (?mode=restored&scale=4). Anything unrecognised is ignored rather than
-  // passed through -- an unknown --video-set key makes the engine exit 2.
+  // A stored in-game config is authoritative unless this page's controls were
+  // explicitly changed or the URL names an override. First launch seeds
+  // /save/mdkr64.ini from the visible picker. Launcher-rank values remain
+  // editable in-game; query-only aspect/FOV flags below stay CLI-ranked.
   const MODES = ["pure", "restored", "remastered"];
   const modeSel = $("mode");
   const scaleSel = $("scale");
   let mode = (qs.get("mode") || (modeSel && modeSel.value) || "").toLowerCase();
   let scale = qs.get("scale") || (scaleSel && scaleSel.value) || "";
-  if (MODES.includes(mode)) mainArgs.push("--" + mode);
-  if (/^[1-4]$/.test(scale)) mainArgs.push("--video-set", "Video.RenderScale=" + scale);
+  const seedMode = !hasStoredVideoConfig || qualityModeDirty || qs.has("mode");
+  const seedScale = !hasStoredVideoConfig || qualityScaleDirty || qs.has("scale");
+  if (seedMode && MODES.includes(mode)) {
+    mainArgs.push("--video-launch-mode", mode);
+  }
+  if (seedScale && /^[1-4]$/.test(scale)) {
+    mainArgs.push("--video-launch-set", "Video.RenderScale=" + scale);
+  }
+  if (seedMode || seedScale) mainArgs.push("--video-launch-persist");
 
   const aspect = qs.get("aspect");
   const fov = qs.get("fov");
@@ -715,39 +930,6 @@ function wireRomUi() {
     $("play").disabled = true;
   });
 
-  // ---- Erase saved progress -------------------------------------------------
-  // Deliberately separate from the ROM control and separately confirmed: this is
-  // the only thing that can recover a browser whose stored save makes the engine
-  // misbehave on boot, and it is also the only thing that destroys lap records.
-  const clearSave = $("clear-save");
-  if (clearSave) {
-    clearSave.addEventListener("click", async () => {
-      const status = $("save-status");
-      const n = await idbCount("/save");
-      if (n === 0) {
-        status.className = "";
-        status.textContent = "There is no saved progress stored for this site.";
-        return;
-      }
-      if (!confirm(
-            "Erase all saved progress for this page?\n\n" +
-            "This deletes your Adventure files, lap records and options. " +
-            "It cannot be undone, and it does not touch your ROM.")) {
-        return;
-      }
-      clearSave.disabled = true;
-      status.className = "";
-      status.textContent = "Erasing…";
-      fsUnlinkAll("/save");
-      const ok = await idbClear("/save");
-      persist();
-      clearSave.disabled = false;
-      status.className = ok ? "ok" : "err";
-      status.textContent = ok
-        ? "Saved progress erased. Reload the page to start fresh."
-        : "Couldn't erase it here — clear this site's data in your browser settings.";
-    });
-  }
 }
 
 // ---- Is there already a ROM in IndexedDB? ----------------------------------
@@ -798,19 +980,90 @@ function wireFpsReadout() {
 function wireFullscreen() {
   const btn = $("fullscreen");
   const stage = $("stage");
-  const go = () => {
-    if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); }
-    else { stage.requestFullscreen().catch(() => {}); }
-    // Keep input going to the canvas, not the button.
-    setTimeout(() => $("canvas").focus(), 0);
+  const canvas = $("canvas");
+  let transition = null;
+
+  const updateButton = () => {
+    if (!btn) return;
+    const active = document.fullscreenElement === stage;
+    btn.disabled = transition !== null;
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+    btn.setAttribute(
+      "aria-label", active ? "Exit fullscreen" : "Enter fullscreen");
+    btn.title = active ? "Exit fullscreen (F)" : "Fullscreen (F)";
   };
+
+  const settleSurface = () => new Promise((resolve) => {
+    // Fullscreen changes both the viewport and, on HiDPI displays, the canvas
+    // backing store. Let those values settle before returning input to wasm.
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
+
+  const go = () => {
+    // A second click/key-repeat while the browser's fullscreen promise is
+    // pending can enqueue an immediate exit and leave resize events racing GPU
+    // target creation. Serialize the transition as one state change.
+    if (transition) return transition;
+    transition = (async () => {
+      try {
+        if (document.fullscreenElement) {
+          await document.exitFullscreen();
+        } else {
+          if (typeof stage.requestFullscreen !== "function") {
+            throw new Error("Fullscreen is unavailable in this browser");
+          }
+          try {
+            await stage.requestFullscreen({ navigationUI: "hide" });
+          } catch (error) {
+            // Older implementations support fullscreen but reject the options
+            // dictionary. Retry only if the first request did not succeed.
+            if (error && error.name === "TypeError" &&
+                document.fullscreenElement !== stage) {
+              await stage.requestFullscreen();
+            } else {
+              throw error;
+            }
+          }
+        }
+        scheduleCanvasResize();
+        await settleSurface();
+        scheduleCanvasResize();
+        canvas.focus({ preventScroll: true });
+      } catch (error) {
+        console.warn("[shell] fullscreen transition failed:", error);
+      } finally {
+        transition = null;
+        updateButton();
+      }
+    })();
+    updateButton();
+    return transition;
+  };
+
+  document.addEventListener("fullscreenchange", () => {
+    scheduleCanvasResize();
+    updateButton();
+  });
+  document.addEventListener("fullscreenerror", (event) => {
+    console.warn("[shell] fullscreen error:", event);
+    updateButton();
+  });
   if (btn) btn.addEventListener("click", go);
   addEventListener("keydown", (e) => {
-    if (e.key === "f" || e.key === "F") {
+    if (e.key.toLowerCase() === "f") {
       // Only while playing, and never while the user is typing in a field.
-      if (!stage.hidden && !/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) go();
+      const active = document.activeElement;
+      const editing = active &&
+        (/^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName) ||
+         active.isContentEditable);
+      if (!stage.hidden && !e.repeat &&
+          !editing) {
+        e.preventDefault();
+        go();
+      }
     }
   });
+  updateButton();
 }
 
 // ---- Startup ---------------------------------------------------------------
@@ -819,6 +1072,11 @@ function wireFullscreen() {
   wireFullscreen();
   wireFpsReadout();
   wireCanvasResize();
+  if (globalThis.MDKRSaveUI) {
+    // Do not gate the rest of the launcher on storage availability. The save
+    // panel reports its own actionable error while ROM selection remains usable.
+    globalThis.MDKRSaveUI.init().catch(() => {});
+  }
 
   // ALWAYS reveal the launcher UI. It used to be hidden behind the WebGPU gate,
   // which meant a browser without a usable adapter showed nothing but an error

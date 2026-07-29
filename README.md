@@ -22,7 +22,8 @@ A **publication target**, nothing more. It holds only built artifacts:
 |---|---|
 | `mdkr64_web.wasm` / `.js` | the compiled engine |
 | `mdkr64_web.js.symbols` | the symbol map from that exact link, so a crash trace can be read |
-| `index.html`, `style.css`, `mdkr64-shell.js` | the launcher shell |
+| `mdkr-save-tools.wasm` / `.js` | the ROM- and renderer-free save codec/editor module |
+| `index.html`, `style.css`, `mdkr64-shell.js`, `mdkr-save-ui.js` | the launcher shell and local save-management UI |
 | `assets/` | project brand art |
 | `build-info.json` | which source commit produced this build |
 
@@ -38,7 +39,9 @@ changes have to happen upstream.
 ## Requirements
 
 A WebGPU browser — Chrome or Edge 113+. There is no WebGL fallback; the page tells
-you up front rather than rendering black.
+you up front rather than rendering black. Save backup, import, editing, and
+recovery remain available when WebGPU is missing; they do not load the game
+engine or require a ROM.
 
 ## Legal
 
