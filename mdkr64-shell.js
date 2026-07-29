@@ -1266,6 +1266,16 @@ function wireFullscreen() {
   const canvas = $("canvas");
   let transition = null;
 
+  // iPhone Safari has no Fullscreen API for page elements (iPad does). A
+  // visible button that can only ever fail is worse than none: hide it and
+  // let the browser chrome own the experience there.
+  if (btn && stage &&
+      typeof stage.requestFullscreen !== "function" &&
+      typeof stage.webkitRequestFullscreen !== "function") {
+    btn.hidden = true;
+    return;
+  }
+
   const updateButton = () => {
     if (!btn) return;
     const active = document.fullscreenElement === stage;
@@ -1291,8 +1301,22 @@ function wireFullscreen() {
       try {
         if (document.fullscreenElement) {
           await document.exitFullscreen();
+        } else if (document.webkitFullscreenElement &&
+                   typeof document.webkitExitFullscreen === "function") {
+          document.webkitExitFullscreen();
         } else {
           if (typeof stage.requestFullscreen !== "function") {
+            // WebKit-prefixed engines (older iPadOS) never reach here when
+            // the standard API is absent unless the prefixed form exists —
+            // wireFullscreen() hides the button otherwise.
+            if (typeof stage.webkitRequestFullscreen === "function") {
+              stage.webkitRequestFullscreen();
+              scheduleCanvasResize();
+              await settleSurface();
+              scheduleCanvasResize();
+              canvas.focus({ preventScroll: true });
+              return;
+            }
             throw new Error("Fullscreen is unavailable in this browser");
           }
           try {

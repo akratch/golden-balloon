@@ -484,6 +484,18 @@ kbd {
   font-size: 18px; line-height: 1; opacity: .35; transition: opacity .16s;
 }
 .fs-btn:hover, .fs-btn:focus-visible { opacity: 1; outline: none; }
+.fs-btn { touch-action: manipulation; }
+/* With the touch overlay active, the bottom-right corner belongs to the
+ * Go/Brake action cluster (z-index 13, pointer-events auto) — the fullscreen
+ * button underneath it was unreachable on phones. Move it to the free
+ * top-right corner, above the overlay chrome. */
+#stage.touch-ui-active .fs-btn {
+  top: max(12px, env(safe-area-inset-top));
+  right: max(14px, calc(env(safe-area-inset-right) + 7px));
+  bottom: auto;
+  z-index: 16;
+  opacity: .55;
+}
 
 /* ---------- mobile touch controller ----------
    Touch chrome floats over the game without changing its render aspect. The
