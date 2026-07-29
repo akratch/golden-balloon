@@ -317,12 +317,45 @@ function applyStoredVideoControls(qs) {
   return true;
 }
 
+// ---- Build identity ---------------------------------------------------------
+// The publisher stamps every asset reference with ?v=<commit> so a stale
+// Safari cache can never mix shell versions; the stamp is recovered from this
+// script's own URL and propagated to the runtime-loaded engine assets. The
+// visible build tag comes from build-info.json and answers "which build am I
+// actually running?" without devtools.
+const BUILD_QUERY = (() => {
+  try {
+    const src = document.currentScript && document.currentScript.src;
+    const match = src && src.match(/\?v=([\w.-]+)$/);
+    return match ? "?v=" + match[1] : "";
+  } catch (_) {
+    return "";
+  }
+})();
+
+(async () => {
+  try {
+    const response = await fetch("build-info.json" + BUILD_QUERY, { cache: "no-cache" });
+    if (!response.ok) return;
+    const info = await response.json();
+    const tag = document.getElementById("build-tag");
+    const text = "build " + (info.source_commit_short || "?") +
+      (info.source_dirty ? " (dirty)" : "") +
+      (info.built_utc ? " · " + info.built_utc : "");
+    if (tag) {
+      tag.textContent = text;
+      tag.hidden = false;
+    }
+    console.info("[shell] " + text);
+  } catch (_) {}
+})();
+
 // ---- Engine factory (loads mdkr64_web.js, which defines createMDKR64) -------
 function loadEngineFactory() {
   if (window.createMDKR64) return Promise.resolve(window.createMDKR64);
   return new Promise((resolve, reject) => {
     const s = document.createElement("script");
-    s.src = "mdkr64_web.js";
+    s.src = "mdkr64_web.js" + BUILD_QUERY;
     s.onload = () => window.createMDKR64
       ? resolve(window.createMDKR64)
       : reject(new Error("mdkr64_web.js loaded but did not define createMDKR64"));
@@ -579,6 +612,9 @@ async function boot() {
   module = await createMDKR64({
     canvas,
     noInitialRun: true,
+    // Keep the wasm and any side files on the same cache-busting stamp as the
+    // shell that loaded them.
+    locateFile: (path, prefix) => (prefix || "") + path + BUILD_QUERY,
     // preRun runs BEFORE the createMDKR64 promise resolves, so `module` is still
     // null here — take the Module from the callback argument instead.
     preRun: [function (m) {
@@ -1072,27 +1108,27 @@ function wireTouchControls() {
   function recomputeButtons() {
     let buttons = accessibilityButtons;
     pressedPointers.forEach((press) => {
-      if (press.inside) buttons |= press.bit;
+      buttons |= press.bits;
     });
     touchPadState.buttons = buttons >>> 0;
     publishTouchPad();
   }
 
-  function refreshButtonClass(button) {
-    const buttonBit = Number(button.dataset.touchButton) >>> 0;
-    const active = (accessibilityButtons & buttonBit) !== 0 ||
-      [...pressedPointers.values()].some(
-        (press) => press.el === button && press.inside);
-    button.classList.toggle("is-pressed", active);
-    if (active) pressedClasses.add(button);
-    else pressedClasses.delete(button);
+  function refreshButtonClasses() {
+    actionButtons.forEach((button) => {
+      const buttonBit = Number(button.dataset.touchButton) >>> 0;
+      const active = (accessibilityButtons & buttonBit) !== 0 ||
+        [...pressedPointers.values()].some(
+          (press) => (press.bits & buttonBit) === buttonBit);
+      button.classList.toggle("is-pressed", active);
+      if (active) pressedClasses.add(button);
+      else pressedClasses.delete(button);
+    });
   }
 
   function releaseButtonPointer(pointerId) {
-    const press = pressedPointers.get(pointerId);
-    if (!press) return;
-    pressedPointers.delete(pointerId);
-    refreshButtonClass(press.el);
+    if (!pressedPointers.delete(pointerId)) return;
+    refreshButtonClasses();
     recomputeButtons();
   }
 
@@ -1186,38 +1222,114 @@ function wireTouchControls() {
     if (event.pointerId === stickPointer) resetStick();
   });
 
-  actionButtons.forEach((button) => {
-    const bit = Number(button.dataset.touchButton) >>> 0;
-    button.addEventListener("pointerdown", (event) => {
+  // ---- The throttle pad: slide-to-chord ----------------------------------
+  // Human-factors model: the action cluster IS the accelerator. Touching any
+  // zone holds A instantly; the zone under the thumb selects the modifier, so
+  // drifting or firing never requires lifting off the throttle:
+  //   Go -> A         Drift -> A+R      Item -> A+Z      Look -> A+C
+  //   Brake -> B      (braking is off-throttle by definition)
+  // Zone changes use nearest-target hysteresis with retention: crossing a gap
+  // or overshooting keeps the last chord, so a mid-corner slide can never
+  // stall the kart; only lifting releases. A second finger still lands as an
+  // independent tap on any zone (bits union across pointers). Pause sits
+  // outside the pad and stays a plain tap without the throttle latch.
+  const N64_A = 32768;
+  const N64_BRAKE = 16384;
+  const N64_PAUSE = 4096;
+  const actions = controls.querySelector(".touch-actions");
+  const clusterButtons = actions
+    ? [...actions.querySelectorAll("[data-touch-button]")]
+    : [];
+
+  function chordBits(bit) {
+    if (bit === N64_A || bit === N64_BRAKE) return bit;
+    return bit | N64_A;
+  }
+
+  function padRects() {
+    return clusterButtons.map((button) => ({
+      button,
+      bit: Number(button.dataset.touchButton) >>> 0,
+      rect: button.getBoundingClientRect(),
+    }));
+  }
+
+  function zoneAt(rects, x, y) {
+    let best = null;
+    let bestScore = Infinity;
+    for (const entry of rects) {
+      const r = entry.rect;
+      const dx = x < r.left ? r.left - x : (x > r.right ? x - r.right : 0);
+      const dy = y < r.top ? r.top - y : (y > r.bottom ? y - r.bottom : 0);
+      const outside = Math.max(dx, dy);
+      if (outside > 14) continue;
+      const cx = x - (r.left + r.right) / 2;
+      const cy = y - (r.top + r.bottom) / 2;
+      // Strictly-inside beats padded reach; ties resolve to nearest center.
+      const score = outside * 1e7 + cx * cx + cy * cy;
+      if (score < bestScore) {
+        bestScore = score;
+        best = entry;
+      }
+    }
+    return best;
+  }
+
+  function padVibrate(ms, type) {
+    try {
+      if (navigator.vibrate && type !== "mouse") navigator.vibrate(ms);
+    } catch (_) {}
+  }
+
+  if (actions) {
+    actions.addEventListener("pointerdown", (event) => {
+      const rects = padRects();
+      const zone = zoneAt(rects, event.clientX, event.clientY);
+      if (!zone) return;
       event.preventDefault();
-      try { button.setPointerCapture(event.pointerId); } catch (_) {}
-      pressedPointers.set(event.pointerId, { bit, el: button, inside: true });
-      refreshButtonClass(button);
+      try { actions.setPointerCapture(event.pointerId); } catch (_) {}
+      pressedPointers.set(event.pointerId, {
+        rects,
+        bits: chordBits(zone.bit),
+        zone: zone.button,
+      });
+      refreshButtonClasses();
       recomputeButtons();
-      try {
-        if (navigator.vibrate && event.pointerType !== "mouse") {
-          navigator.vibrate(8);
-        }
-      } catch (_) {}
+      padVibrate(8, event.pointerType);
     });
-    button.addEventListener("pointermove", (event) => {
+    actions.addEventListener("pointermove", (event) => {
       const press = pressedPointers.get(event.pointerId);
-      if (!press) return;
-      const rect = button.getBoundingClientRect();
-      const padding = 12;
-      const inside = event.clientX >= rect.left - padding &&
-        event.clientX <= rect.right + padding &&
-        event.clientY >= rect.top - padding &&
-        event.clientY <= rect.bottom + padding;
-      if (inside === press.inside) return;
-      press.inside = inside;
-      refreshButtonClass(button);
+      if (!press || !press.rects) return;
+      const zone = zoneAt(press.rects, event.clientX, event.clientY);
+      if (!zone || zone.button === press.zone) return;
+      press.zone = zone.button;
+      press.bits = chordBits(zone.bit);
+      refreshButtonClasses();
       recomputeButtons();
+      padVibrate(5, event.pointerType);
     });
     ["pointerup", "pointercancel", "lostpointercapture"].forEach((name) => {
-      button.addEventListener(name, (event) =>
+      actions.addEventListener(name, (event) =>
         releaseButtonPointer(event.pointerId));
     });
+  }
+
+  actionButtons.forEach((button) => {
+    const bit = Number(button.dataset.touchButton) >>> 0;
+    if (bit === N64_PAUSE) {
+      button.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        try { button.setPointerCapture(event.pointerId); } catch (_) {}
+        pressedPointers.set(event.pointerId, { bits: bit, zone: button });
+        refreshButtonClasses();
+        recomputeButtons();
+        padVibrate(8, event.pointerType);
+      });
+      ["pointerup", "pointercancel", "lostpointercapture"].forEach((name) => {
+        button.addEventListener(name, (event) =>
+          releaseButtonPointer(event.pointerId));
+      });
+    }
     // Screen readers and switch controls may activate a button without Pointer
     // Events. Hold it long enough to cross at least one authored 30 Hz sample.
     button.addEventListener("click", (event) => {
@@ -1230,7 +1342,7 @@ function wireTouchControls() {
       pulseTimers.set(bit, setTimeout(() => {
         accessibilityButtons &= ~bit;
         pulseTimers.delete(bit);
-        refreshButtonClass(button);
+        refreshButtonClasses();
         recomputeButtons();
       }, 90));
     });
@@ -1273,6 +1385,17 @@ function wireFullscreen() {
       typeof stage.requestFullscreen !== "function" &&
       typeof stage.webkitRequestFullscreen !== "function") {
     btn.hidden = true;
+    // Give iPhone players the real path to a chromeless game: Safari has no
+    // element fullscreen, but an installed home-screen app launches with the
+    // manifest's fullscreen display mode.
+    try {
+      const standalone = navigator.standalone === true ||
+        (typeof matchMedia === "function" &&
+         matchMedia("(display-mode: standalone), (display-mode: fullscreen)")
+           .matches);
+      const hint = document.getElementById("ios-fullscreen-hint");
+      if (hint && !standalone) hint.hidden = false;
+    } catch (_) {}
     return;
   }
 

@@ -469,6 +469,11 @@ kbd {
 #canvas {
   display: block; width: 100vw; height: 100vh;
   max-width: 100vw; max-height: 100vh;
+  /* iOS Safari: 100vh includes the area behind the collapsing toolbar, which
+   * squeezed and mis-centered the game. Dynamic viewport units track the
+   * REAL visible height; older engines keep the vh fallback above. */
+  width: 100dvw; height: 100dvh;
+  max-width: 100dvw; max-height: 100dvh;
   background: #000; outline: none;
   /* Always suppress browser touch gestures on the live game surface — with
    * the overlay hidden (gamepad pairing, screenshots) a pinch would otherwise
@@ -701,29 +706,35 @@ kbd {
   font-size: clamp(13px, 3.4vh, 17px);
 }
 .touch-drift {
-  right: 5%;
-  top: 0;
-  width: 38%;
+  left: 0;
+  bottom: 0;
+  width: 40%;
   aspect-ratio: 1;
 }
+/* Thumb-arc layout for the slide-to-chord pad: Go anchors the corner where
+ * the thumb rests; the most frequent chord (Drift) is one easy horizontal
+ * slide inboard; Item is one vertical slide up; Brake sits on the deliberate
+ * diagonal (hardest to hit by accident — braking should never be a slip);
+ * Look tucks into the center pocket. Gaps between zones are covered by the
+ * pad's zone-retention rule, so they never drop the throttle. */
 .touch-item {
-  left: 7%;
+  right: 2%;
   top: 0;
-  width: 34%;
+  width: 38%;
   aspect-ratio: 1;
 }
 .touch-brake {
-  left: 0;
-  bottom: 3%;
-  width: 38%;
+  left: 2%;
+  top: 4%;
+  width: 33%;
   aspect-ratio: 1;
 }
 .touch-look {
-  left: 40%;
-  top: 39%;
-  width: 27%;
-  /* 27% of the smallest action-cluster width lands at ~38-43px; hold the
-   * 44px comfortable-touch floor a mid-race rear-view button needs. */
+  left: 28%;
+  top: 40%;
+  width: 25%;
+  /* Hold the 44px comfortable-touch floor a mid-race rear-view button
+   * needs even at the smallest cluster size. */
   min-width: 44px;
   min-height: 44px;
   aspect-ratio: 1;

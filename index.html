@@ -17,8 +17,13 @@
 <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
 <link rel="icon" type="image/png" sizes="256x256" href="assets/favicon.png">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest?v=7b641d0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Golden Balloon">
 <link rel="preload" as="image" href="assets/hero.jpg" fetchpriority="high">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=7b641d0">
 </head>
 <body>
 
@@ -274,6 +279,12 @@
             <a href="https://github.com/akratch/golden-balloon/blob/main/LICENSE">License (MIT, our code only)</a> ·
             <a href="https://github.com/akratch/golden-balloon">Source of this page</a>
           </p>
+          <p class="fine" id="ios-fullscreen-hint" hidden>
+            iPhone tip: Safari cannot full-screen web games. For a chromeless,
+            full-screen experience use <strong>Share&nbsp;→&nbsp;Add to Home
+            Screen</strong> and launch from the icon.
+          </p>
+          <p class="fine" id="build-tag" hidden></p>
         </footer>
       </div>
     </div>
@@ -351,8 +362,8 @@
 
 <!-- rom-id.js MUST come first: the shell calls dkrValidateRom() from it. It is the
      browser mirror of platform/rom_id.c (revision table + byte-order fix-up). -->
-<script src="rom-id.js"></script>
-<script src="mdkr-save-ui.js"></script>
-<script src="mdkr64-shell.js"></script>
+<script src="rom-id.js?v=7b641d0"></script>
+<script src="mdkr-save-ui.js?v=7b641d0"></script>
+<script src="mdkr64-shell.js?v=7b641d0"></script>
 </body>
 </html>
