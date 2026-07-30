@@ -37,6 +37,18 @@
   --ok:         #57e08a;
   --err:        #ff8189;
   --grid:       clamp(20px, 3vw, 30px);   /* panel padding */
+
+  /* Motion: critically-damped by default (Apple's "damping 1.0" — settles
+     without overshoot), used for every state change nothing was flicked or
+     dragged into. Reserved for the rare momentum-carrying transition. */
+  --ease-out:    cubic-bezier(.16, 1, .3, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+
+  /* One floating-material recipe reused everywhere translucent chrome sits
+     above content, so a blur, a saturation boost, and a bright top edge (light
+     catching real glass) always travel together. */
+  --glass-blur:   blur(20px) saturate(160%);
+  --glass-edge:   inset 0 1px 0 rgba(255, 255, 255, .08);
 }
 
 * { box-sizing: border-box; }
@@ -109,7 +121,9 @@ html, body {
 
 .intro {
   background: linear-gradient(180deg, var(--sky) 0%, #9ed2fb 100%);
-  padding: 22px 20px 26px; text-align: center;
+  padding: 22px max(20px, env(safe-area-inset-right)) 26px
+           max(20px, env(safe-area-inset-left));
+  text-align: center;
 }
 .lede {
   max-width: 56ch; margin: 0 auto;
@@ -132,7 +146,13 @@ html, body {
 
 .wrap {
   width: 100%; max-width: 1060px;
-  margin: 0 auto; padding: clamp(22px, 3.5vw, 34px) 20px 64px;
+  margin: 0 auto;
+  /* env(safe-area-inset-*) only matters in landscape on a notched iPhone —
+     the launcher scrolls normally there, so its own side padding (not just
+     the in-game overlay's) needs to clear the sensor housing / home
+     indicator. */
+  padding: clamp(22px, 3.5vw, 34px) max(20px, env(safe-area-inset-right)) 64px
+           max(20px, env(safe-area-inset-left));
 }
 
 .status-line {
@@ -164,9 +184,16 @@ html, body {
 
 /* ---------- panels ---------- */
 
+/* Floating material, not a flat box: content behind it (the page's own dark
+   gradient) shows through a blur, and a bright inset top edge reads as light
+   catching glass. Panels are the biggest surfaces on the page, so they carry
+   the strongest blur in the material system (see --glass-blur/--glass-edge). */
 .panel {
-  background: linear-gradient(180deg, var(--panel), rgba(9, 30, 58, .92));
+  background: linear-gradient(180deg, rgba(13, 43, 82, .82), rgba(9, 30, 58, .78));
   border: 1px solid var(--line); border-left: 4px solid var(--gold);
+  box-shadow: var(--glass-edge);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   padding: var(--grid);
 }
 .panel + .panel { margin-top: 18px; }
@@ -190,13 +217,24 @@ h3 { font-size: 15px; letter-spacing: .07em; color: var(--gold); margin-bottom: 
   border: 2px dashed rgba(255, 196, 46, .45); border-radius: 3px;
   background: rgba(255, 196, 46, .05);
   padding: 34px 22px; text-align: center; cursor: pointer;
-  transition: background .16s, border-color .16s;
+  transition: background .16s var(--ease-out), border-color .16s var(--ease-out),
+              transform .1s var(--ease-out);
+  -webkit-tap-highlight-color: transparent;
 }
 .drop:hover, .drop:focus-visible {
   background: rgba(255, 196, 46, .1); border-color: var(--gold); outline: none;
 }
+.drop:active { transform: scale(.995); background: rgba(255, 196, 46, .14); }
+/* An active drag has real momentum behind it — the only interaction on this
+   page a user "throws" rather than taps — so this is the one place a slight
+   spring overshoot earns its keep (apple-design §4: bounce only where a
+   gesture carried it in) rather than the critically-damped --ease-out used
+   for every plain tap/hover state above. */
 .drop.over {
   background: rgba(255, 196, 46, .18); border-color: var(--gold); border-style: solid;
+  transform: scale(1.008);
+  transition: background .16s var(--ease-spring), border-color .16s var(--ease-spring),
+              transform .22s var(--ease-spring);
 }
 .drop-icon { width: 32px; height: 32px; color: var(--gold); margin-bottom: 4px; }
 .drop-title { margin: 0 0 6px; font-size: 17px; font-weight: 650; }
@@ -215,9 +253,14 @@ code {
 
 .btn {
   font: inherit; font-weight: 800; cursor: pointer; border: 0;
-  transition: filter .12s, opacity .12s, transform .1s;
+  transition: filter .12s var(--ease-out), opacity .12s var(--ease-out),
+              transform .1s var(--ease-out), background-color .1s var(--ease-out),
+              border-color .1s var(--ease-out), box-shadow .1s var(--ease-out);
+  /* The system tap-highlight box would otherwise flash under our own
+     pointer-down feedback below — one response per tap, not two. */
+  -webkit-tap-highlight-color: transparent;
 }
-.btn:active { transform: translateY(1px); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
 
 /* Skewed like a decal. The label counter-skews so the text stays upright. */
 .btn-primary {
@@ -229,6 +272,13 @@ code {
 }
 .btn-primary > span { display: inline-block; transform: skewX(9deg); }
 .btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
+/* Feedback lands the instant a finger/pointer goes down, not on release (see
+   apple-design §1) — the skew is part of the identity, so press keeps it
+   rather than un-skewing on tap, and adds a small press-in scale on top. */
+.btn-primary:active:not(:disabled) {
+  transform: skewX(-9deg) scale(.97); filter: brightness(.95);
+  box-shadow: 0 3px 10px rgba(245, 166, 35, .28), inset 0 1px 0 rgba(255, 255, 255, .4);
+}
 .btn-primary:disabled { opacity: .38; cursor: not-allowed; box-shadow: none; }
 
 .btn-ghost {
@@ -236,6 +286,10 @@ code {
   color: var(--ink-dim); border: 1px solid var(--line); font-weight: 600;
 }
 .btn-ghost:hover { color: var(--ink); border-color: rgba(160, 190, 230, .55); }
+.btn-ghost:active:not(:disabled) {
+  transform: scale(.97); color: var(--ink);
+  background: rgba(160, 190, 230, .1); border-color: rgba(160, 190, 230, .55);
+}
 .btn-ghost:disabled { opacity: .42; cursor: not-allowed; }
 
 /* Destructive. Same ghost shape so it does not shout from the page, but outlined
@@ -248,6 +302,10 @@ code {
 .btn-danger:hover:not(:disabled) {
   color: #fff; background: rgba(255, 129, 137, .14);
   border-color: rgba(255, 129, 137, .8);
+}
+.btn-danger:active:not(:disabled) {
+  transform: scale(.97); color: #fff;
+  background: rgba(255, 129, 137, .26); border-color: rgba(255, 129, 137, .9);
 }
 .btn-danger:disabled { opacity: .45; cursor: not-allowed; }
 
@@ -264,6 +322,10 @@ code {
   color: var(--ink-dim);
   text-align: center;
   font-size: 12.5px;
+  cursor: pointer;
+  transition: background .16s var(--ease-out), border-color .16s var(--ease-out),
+              color .16s var(--ease-out), transform .1s var(--ease-out);
+  -webkit-tap-highlight-color: transparent;
 }
 .save-drop.over,
 .save-drop:focus-visible {
@@ -273,6 +335,7 @@ code {
   color: var(--ink);
   background: rgba(255, 196, 46, .08);
 }
+.save-drop:active { transform: scale(.99); background: rgba(255, 196, 46, .1); }
 
 #save-dialog {
   width: min(960px, calc(100vw - 28px));
@@ -283,8 +346,28 @@ code {
   background: var(--navy-2);
   color: var(--ink);
   overflow: auto;
+  /* Materialize rather than just fade (apple-design §12): scale and opacity
+     move together so the sheet reads as arriving, not blinking on. Browsers
+     without discrete-property transitions just show/hide it instantly, same
+     as before this pass — purely additive. */
+  opacity: 1;
+  transform: scale(1);
+  transition: opacity .22s var(--ease-out), transform .22s var(--ease-out),
+              overlay .22s var(--ease-out) allow-discrete,
+              display .22s var(--ease-out) allow-discrete;
 }
-#save-dialog::backdrop { background: rgba(0, 8, 20, .78); }
+@starting-style {
+  #save-dialog[open] { opacity: 0; transform: scale(.96); }
+}
+#save-dialog::backdrop {
+  background: rgba(0, 8, 20, .78);
+  transition: background-color .22s var(--ease-out),
+              overlay .22s var(--ease-out) allow-discrete,
+              display .22s var(--ease-out) allow-discrete;
+}
+@starting-style {
+  #save-dialog[open]::backdrop { background-color: rgba(0, 8, 20, 0); }
+}
 .save-dialog-head {
   position: sticky;
   top: 0;
@@ -481,14 +564,24 @@ kbd {
   touch-action: none;
 }
 
+/* Same floating-material recipe as the touch overlay chrome (blur + bright
+   top edge) so the fullscreen control reads as one family of glass, whether
+   or not the touch pad is on screen next to it. */
 .fs-btn {
   position: fixed; right: 14px; bottom: 14px; z-index: 11;
   width: 42px; height: 42px; border-radius: 4px; cursor: pointer;
-  background: rgba(8, 22, 44, .72); color: var(--ink);
+  background: rgba(8, 22, 44, .68); color: var(--ink);
   border: 1px solid rgba(150, 185, 230, .3);
-  font-size: 18px; line-height: 1; opacity: .35; transition: opacity .16s;
+  box-shadow: var(--glass-edge);
+  backdrop-filter: blur(14px) saturate(145%);
+  -webkit-backdrop-filter: blur(14px) saturate(145%);
+  font-size: 18px; line-height: 1; opacity: .35;
+  transition: opacity .16s var(--ease-out), transform .1s var(--ease-out),
+              background-color .1s var(--ease-out);
+  -webkit-tap-highlight-color: transparent;
 }
 .fs-btn:hover, .fs-btn:focus-visible { opacity: 1; outline: none; }
+.fs-btn:active { opacity: 1; transform: scale(.92); background: rgba(8, 22, 44, .85); }
 .fs-btn { touch-action: manipulation; }
 /* With the touch overlay active, the bottom-right corner belongs to the
  * Go/Brake action cluster (z-index 13, pointer-events auto) — the fullscreen
@@ -534,6 +627,8 @@ kbd {
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
   opacity: .7;
+  transition: opacity .16s var(--ease-out), transform .1s var(--ease-out),
+              background-color .1s var(--ease-out);
 }
 .touch-toggle:active { transform: scale(.96); opacity: 1; }
 .touch-toggle:focus-visible {
@@ -575,7 +670,9 @@ kbd {
    * overlaps this spot, and a Pause tap must never read as throttle. */
   z-index: 1;
   opacity: .55;
-  transition: opacity .16s;
+  transition: opacity .16s var(--ease-out), transform .1s var(--ease-out),
+              background-color .1s var(--ease-out), border-color .1s var(--ease-out),
+              box-shadow .1s var(--ease-out);
   min-width: 48px;
   min-height: 44px;
   padding: 0 12px;
@@ -613,6 +710,9 @@ kbd {
               inset 0 1px 0 rgba(255, 255, 255, .13);
   backdrop-filter: blur(14px) saturate(130%);
   -webkit-backdrop-filter: blur(14px) saturate(130%);
+  /* Highlights the ring on grab; the knob itself (tracked 1:1 to the finger)
+     deliberately carries no transition — see apple-design §2/§11. */
+  transition: border-color .12s var(--ease-out), background .12s var(--ease-out);
 }
 .touch-stick-ring::before,
 .touch-stick-ring::after {
@@ -690,6 +790,16 @@ kbd {
   font: 800 clamp(10px, 2.7vh, 13px)/1 system-ui, sans-serif;
   letter-spacing: -.01em;
   will-change: transform;
+  /* transform is deliberately NOT in this transition (and never should be):
+     these are exactly the elements padRects()/zoneAt() measures with
+     getBoundingClientRect() for slide-to-chord hit-testing, and that call
+     returns the POST-transform box. An animated scale would let a second
+     finger's pointerdown sample a mid-tween rect and shift its zone — a
+     real change to touch geometry, not just visuals (apple-design's own
+     "respond on pointer-down, instantly" also argues for zero delay here).
+     Only the non-geometry paint properties get the smoothing. */
+  transition: background-color .1s var(--ease-out), border-color .1s var(--ease-out),
+              box-shadow .1s var(--ease-out);
 }
 .touch-action small {
   color: rgba(230, 239, 252, .58);
@@ -818,8 +928,21 @@ kbd {
   .touch-pause,
   .touch-action,
   .touch-stick-ring,
-  .touch-rotate-hint {
+  .touch-rotate-hint,
+  .fs-btn {
     background: rgba(5, 22, 43, .94);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  /* Launcher-side glass: same instruction — go frosty/solid rather than
+     leaning on a blur the user asked us not to render. */
+  .panel {
+    background: rgb(15, 39, 71);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .quality {
+    background: rgba(10, 36, 71, .92);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
@@ -829,12 +952,15 @@ kbd {
   .touch-toggle:not([hidden]),
   .touch-pause,
   .touch-action,
-  .touch-stick-ring {
+  .touch-stick-ring,
+  .fs-btn {
     border-color: #fff;
     background-color: rgba(0, 8, 20, .96);
   }
   .touch-stick-label,
   .touch-action small { color: #fff; }
+  .panel { border-color: #fff; }
+  .quality { border-color: #fff; }
 }
 
 /* Frame-rate readout (F3). Deliberately plain — it is instrumentation. */
@@ -851,12 +977,19 @@ kbd {
   padding: 10px 18px; border-radius: 4px; font-size: 14px;
 }
 
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
 
 /* Links in body copy. The page had none until the known-issues block and the legal
    line; without this they inherit the ink colour and read as plain text. */
-.notes a, .foot a { color: var(--gold); text-decoration: underline; }
+.notes a, .foot a {
+  color: var(--gold); text-decoration: underline;
+  transition: color .1s var(--ease-out);
+  -webkit-tap-highlight-color: transparent;
+}
 .notes a:hover, .foot a:hover { color: #ffd76a; }
+.notes a:active, .foot a:active { color: #ffe9a8; }
 
 /* --- Presentation controls (videoconf) --------------------------------- */
 .quality {
@@ -869,6 +1002,9 @@ kbd {
   border: 1px solid var(--line);
   border-radius: 10px;
   background: rgba(10, 36, 71, .45);
+  box-shadow: var(--glass-edge);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
 }
 .quality-label {
   font-size: 13px;

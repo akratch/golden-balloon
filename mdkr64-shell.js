@@ -13,6 +13,17 @@
 
 "use strict";
 
+// ---- Visual-only: make :active feedback reliable on iOS Safari ------------
+// iOS Safari only applies the CSS :active pseudo-class to a tapped element
+// while at least one ancestor has a touchstart listener; without one, taps
+// on the plain launcher buttons (Play, Forget, Download backup, ...) skip
+// straight from default to hover-ish state with no visible press. This is
+// the standard, well-documented no-op fix. It does not read or react to any
+// touch data, does not call preventDefault, and is entirely independent of
+// the touch-pad pointer lifecycle below (which drives its own "is-pressed"
+// classes directly and never relies on :active). Zero effect on gameplay.
+document.addEventListener("touchstart", () => {}, { passive: true });
+
 // The ROM is always written here in canonical .z64 order — validateRom() below
 // converts a .v64/.n64 pick in place before it is persisted, so the name is
 // accurate rather than aspirational. Size and revision live in rom-id.js.
