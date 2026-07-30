@@ -27,8 +27,9 @@ A **publication target**, nothing more. It holds only built artifacts:
 | `assets/` | project brand art |
 | `build-info.json` | which source commit produced this build |
 
-**There is no source code here** — no decompiled game code, no engine source. The
-development repository is separate and private.
+**There is no source code here** — no decompiled game code, no engine source.
+This repository holds only the built web artifacts that GitHub Pages serves. The
+source lives in its own repository; see the project README for the link.
 
 ## Do not send pull requests here
 

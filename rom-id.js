@@ -146,23 +146,30 @@ function dkrIdentifyRom(bytes) {
 
 // The user-facing sentence for `id`. Mirrors dkr_rom_describe() in rom_id.c
 // character for character — tests/check_rom_revision.py compares the two.
+//
+// "Character for character" includes the punctuation: the native strings use an
+// ASCII hyphen, not U+2014, because U+2014 mojibakes on a Windows console. Any
+// dash inside a sentence BELOW that also exists in rom_id.c/rom_io.c must stay
+// ASCII, or the two sides differ by one byte and the gate fails. Em-dashes in
+// the comments and in browser-only DOM strings are fine — this rule is only
+// about text that has a native twin.
 function dkrDescribeRom(id, name) {
   const p = name || "that file";
   const supported = dkrSupportedList();
   switch (id.verdict) {
     case "supported":
       if (id.matchedByCrc) {
-        return `${p} is ${id.revisionName} (${id.decompBuild}) — a revision this build supports.`;
+        return `${p} is ${id.revisionName} (${id.decompBuild}) - a revision this build supports.`;
       }
       return `${p} has a ${id.revisionName} header (${id.decompBuild}) but its CRC1/CRC2 ` +
              `(0x${hex8(id.crc1)} / 0x${hex8(id.crc2)}) do not match that revision's reference ` +
-             `pair (0x${hex8(id.refCrc1)} / 0x${hex8(id.refCrc2)}) — a modified or imperfect ` +
+             `pair (0x${hex8(id.refCrc1)} / 0x${hex8(id.refCrc2)}) - a modified or imperfect ` +
              `dump. Continuing anyway.`;
     case "other-revision":
       return `${p} is the ${id.revisionName} release of Diddy Kong Racing (decomp build ` +
              `${id.decompBuild}), which this build does not support: it is compiled for ` +
              `${supported}. Other revisions are refused rather than run because they are ` +
-             `unvalidated against this build's asset assumptions — see docs/ROM_REVISIONS.md.`;
+             `unvalidated against this build's asset assumptions - see docs/ROM_REVISIONS.md.`;
     case "unknown-revision":
       return `${p} is a Diddy Kong Racing cartridge (game code "${id.gameCode}", version ` +
              `0x${id.version.toString(16).toUpperCase().padStart(2, "0")}) but not a revision ` +
@@ -192,7 +199,7 @@ function dkrValidateRom(bytes, name) {
   if (order === null) {
     const m = [0, 1, 2, 3].map((i) => bytes[i].toString(16).padStart(2, "0")).join(" ");
     return {
-      error: `${p} is not an N64 ROM — its first four bytes are ${m}, which is none of ` +
+      error: `${p} is not an N64 ROM - its first four bytes are ${m}, which is none of ` +
              `.z64 (80 37 12 40), .v64 (37 80 40 12) or .n64 (40 12 37 80).`,
       warning: null, order: null, id: null,
     };

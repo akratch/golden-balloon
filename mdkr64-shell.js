@@ -713,8 +713,12 @@ async function boot() {
 
   // Size the surface first so SDL and the first WebGPU configure agree.
   const dim = sizeCanvas();
-  console.log("[shell] canvas backing store " + dim.bw + "x" + dim.bh +
-              " (css " + dim.cssW + "x" + dim.cssH + ")");
+  // Diagnostic only: gated behind the same ?trace= flag that arms the engine's
+  // own traces, so a normal boot writes nothing to the console.
+  if (new URLSearchParams(location.search).get("trace")) {
+    console.info("[shell] canvas backing store " + dim.bw + "x" + dim.bh +
+                 " (css " + dim.cssW + "x" + dim.cssH + ")");
+  }
 
   let createMDKR64;
   try {
