@@ -480,7 +480,7 @@
 479:mdkr_save_decode
 480:SDL_GetWindowDisplayIndex
 481:update_player_racer
-482:strtox_3721
+482:strtox_3720
 483:mtx_cam_push
 484:mdkr_object_layout_append_array
 485:level_name
@@ -1299,7 +1299,7 @@
 1298:clear_game_progress
 1299:cinematic_start
 1300:checkpoint_update_all
-1301:checkint_3642
+1301:checkint_3641
 1302:check_for_controller_pak_errors
 1303:camera_endpoint_observe
 1304:cam_set_fov
@@ -1581,7 +1581,7 @@
 1580:__amDMA
 1581:WorkDoneEvent::GetType\28\29
 1582:WorkDoneEvent::Complete\28unsigned\20long\20long\2c\20EventCompletionType\29
-1583:WGPUDeviceImpl::~WGPUDeviceImpl\28\29_3475
+1583:WGPUDeviceImpl::~WGPUDeviceImpl\28\29_3474
 1584:WGPUDeviceImpl::~WGPUDeviceImpl\28\29
 1585:WGPUDeviceImpl::WillDropLastExternalRef\28\29
 1586:WGPUBufferImpl::WillDropLastExternalRef\28\29
@@ -1801,17 +1801,17 @@
 1800:SDL_AudioDetectDevices_Default
 1801:SDL_AudioCaptureFromDevice_Default
 1802:SDL_AtomicGet
-1803:RequestDeviceEvent::~RequestDeviceEvent\28\29_3489
+1803:RequestDeviceEvent::~RequestDeviceEvent\28\29_3488
 1804:RequestDeviceEvent::~RequestDeviceEvent\28\29
 1805:RequestDeviceEvent::GetType\28\29
 1806:RequestDeviceEvent::Complete\28unsigned\20long\20long\2c\20EventCompletionType\29
-1807:RequestAdapterEvent::~RequestAdapterEvent\28\29_3497
+1807:RequestAdapterEvent::~RequestAdapterEvent\28\29_3496
 1808:RequestAdapterEvent::~RequestAdapterEvent\28\29
 1809:RequestAdapterEvent::GetType\28\29
 1810:RemovePendingSizeChangedAndResizedEvents
 1811:RemovePendingMoveEvents
 1812:RemovePendingExposedEvents
-1813:MapAsyncEvent::~MapAsyncEvent\28\29_3481
+1813:MapAsyncEvent::~MapAsyncEvent\28\29_3480
 1814:MapAsyncEvent::~MapAsyncEvent\28\29
 1815:MapAsyncEvent::GetType\28\29
 1816:MapAsyncEvent::Complete\28unsigned\20long\20long\2c\20EventCompletionType\29
@@ -1870,7 +1870,7 @@
 1869:EMSCRIPTENAUDIO_OpenDevice
 1870:EMSCRIPTENAUDIO_Init
 1871:EMSCRIPTENAUDIO_CloseDevice
-1872:DeviceLostEvent::~DeviceLostEvent\28\29_3485
+1872:DeviceLostEvent::~DeviceLostEvent\28\29_3484
 1873:DeviceLostEvent::~DeviceLostEvent\28\29
 1874:DeviceLostEvent::GetType\28\29
 1875:DeviceLostEvent::Complete\28unsigned\20long\20long\2c\20EventCompletionType\29
@@ -1885,7 +1885,7 @@
 1884:DISKAUDIO_DetectDevices
 1885:DISKAUDIO_CloseDevice
 1886:DISKAUDIO_CaptureFromDevice
-1887:CreatePipelineEventBase<WGPURenderPipelineImpl\2c\20\28EventType\292\2c\20WGPUCreateRenderPipelineAsyncCallbackInfo>::~CreatePipelineEventBase\28\29_3493
+1887:CreatePipelineEventBase<WGPURenderPipelineImpl\2c\20\28EventType\292\2c\20WGPUCreateRenderPipelineAsyncCallbackInfo>::~CreatePipelineEventBase\28\29_3492
 1888:CreatePipelineEventBase<WGPURenderPipelineImpl\2c\20\28EventType\292\2c\20WGPUCreateRenderPipelineAsyncCallbackInfo>::~CreatePipelineEventBase\28\29
 1889:CreatePipelineEventBase<WGPURenderPipelineImpl\2c\20\28EventType\292\2c\20WGPUCreateRenderPipelineAsyncCallbackInfo>::GetType\28\29
 1890:Blit_RGB888_index8
@@ -1962,6 +1962,6 @@
 1961:1661
 1962:1662
 1963:1663
-1964:.Lcall_dtors_2056
-1965:.Lcall_dtors_2042
+1964:.Lcall_dtors_2055
+1965:.Lcall_dtors_2041
 1966:.Lcall_dtors
