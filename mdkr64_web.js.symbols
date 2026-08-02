@@ -313,8 +313,8 @@
 312:draw_text
 313:gfx_webgpu_fault_hit
 314:strlen
-315:hud_element_render
-316:mdkr_trace
+315:mdkr_trace
+316:hud_element_render
 317:coss_f
 318:sins_f
 319:arctan2_f
@@ -326,8 +326,8 @@
 325:strlcpy
 326:strcasecmp
 327:snprintf
-328:iprintf
-329:atoi
+328:atoi
+329:iprintf
 330:SDL_EventState
 331:sndp_stop
 332:get_misc_asset
