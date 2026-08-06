@@ -101,15 +101,90 @@ globalThis.MDKRSaveUI = (() => {
     status.textContent = message;
   }
 
+  // Controls that WRITE /save. Exactly one tab on this origin owns writes to
+  // that shared IndexedDB database (see the ownership note in mdkr64-shell.js);
+  // automatic engine persistence was already gated on it, but Import, Edit,
+  // Restore and Erase were not, so a spectator tab could overwrite the owner's
+  // progress by hand — the same last-writer-wins loss the lock exists to
+  // prevent, just driven by a button instead of a timer.
+  const MUTATING_CONTROL_IDS = Object.freeze([
+    "import-save-button", "import-paks-button", "edit-save",
+    "restore-save-snapshot", "clear-save", "save-drop",
+  ]);
+  const READONLY_CONTROL_IDS = Object.freeze([
+    "download-save", "download-save-raw", "download-paks",
+  ]);
+  const SPECTATOR_NOTICE =
+    "Another tab owns saved progress for this site, so this tab can export " +
+    "backups but cannot import, edit, restore or erase. Close the other tab " +
+    "and reload to manage saves from here.";
+  // Permissive until the shell tells us otherwise: this module is also loaded
+  // by pages that never run the ownership claim, and refusing writes there
+  // would break save management for a single-tab user.
+  let writeOwnership = "owner";
+
+  function spectator() {
+    return writeOwnership === "spectator";
+  }
+
+  // #save-drop belongs in this set: it is a real <button> that opens the same
+  // import path as #import-save-button, and a drop landing on it before
+  // createRepository() resolves reaches a null module.
   function setControlsDisabled(disabled) {
-    for (const id of [
-      "download-save", "download-save-raw", "import-save-button",
-      "download-paks", "import-paks-button", "edit-save",
-      "restore-save-snapshot", "clear-save",
-    ]) {
+    for (const id of [...READONLY_CONTROL_IDS, ...MUTATING_CONTROL_IDS]) {
       const element = byId(id);
       if (element) element.disabled = disabled;
     }
+    if (!disabled) applyWriteOwnership();
+  }
+
+  // Re-disable the mutating half after any general enable. Called on every
+  // transition rather than only once, because setControlsDisabled(false) runs
+  // at init and at the end of each transaction.
+  function applyWriteOwnership() {
+    if (!spectator()) return;
+    for (const id of MUTATING_CONTROL_IDS) {
+      const element = byId(id);
+      if (element) {
+        element.disabled = true;
+        element.title = SPECTATOR_NOTICE;
+      }
+    }
+  }
+
+  // The visible half of the same verdict, in the shell's notice idiom. A
+  // disabled button still receives drop events and a dialog can be reached by
+  // other means, so every mutating entry point states the precondition itself
+  // instead of trusting the disabled attribute.
+  function saveWritesAllowed() {
+    if (spectator()) {
+      setStatus(SPECTATOR_NOTICE, "err");
+      return false;
+    }
+    return true;
+  }
+
+  function setOwnership(value) {
+    writeOwnership = value === "spectator" ? "spectator" : "owner";
+    applyWriteOwnership();
+    if (spectator()) setStatus(SPECTATOR_NOTICE, "err");
+  }
+
+  // The drop zone is a drop TARGET as well as a button, and a disabled button
+  // still receives drop events. Every entry point into a transaction therefore
+  // states the precondition itself, in a sentence a player can act on, instead
+  // of letting `repository` or `saveModule` be null one frame deeper.
+  function saveToolsReady() {
+    if (!repository || !saveModule) {
+      setStatus(
+        "Save tools are still starting. Try again in a moment.", "err");
+      return false;
+    }
+    if (released) {
+      setStatus("Reload the launcher before managing saves.", "err");
+      return false;
+    }
+    return true;
   }
 
   function loadFactory() {
@@ -469,9 +544,20 @@ globalThis.MDKRSaveUI = (() => {
       async release() {
         return serialize(async () => {
           if (released) return;
-          await syncFs(false);
+          // Ownership of /save transfers whether or not the final flush
+          // succeeds -- the engine is about to mount the same store either way.
+          // Close this module's write path FIRST so a failing flush cannot
+          // leave controls live against a store the engine now owns, then let
+          // the failure travel to the caller.
           released = true;
           setControlsDisabled(true);
+          // A spectator's MEMFS view is a stale snapshot of a store another
+          // tab owns; flushing it here would overwrite the owner's newer
+          // progress with exactly the image the ownership claim exists to
+          // keep out. Spectators hand over without writing.
+          if (!spectator()) {
+            await syncFs(false);
+          }
         });
       },
 
@@ -593,6 +679,11 @@ globalThis.MDKRSaveUI = (() => {
     },
 
     container() {
+      // tools/web/stamp_publish.sh writes data-build-version onto <html> in the
+      // PUBLISHED copy, so an exported backup records the product version that
+      // wrote it -- the same field the native CLI stamps. "browser" survives
+      // only on an unstamped local dev page, where there is no version to tell
+      // the truth about.
       const values = [
         new Date().toISOString(),
         document.documentElement.dataset.buildVersion || "browser",
@@ -892,10 +983,8 @@ globalThis.MDKRSaveUI = (() => {
 
   async function acceptControllerPakBundle(file) {
     if (!file) return;
-    if (released) {
-      setStatus("Reload the launcher before managing saves.", "err");
-      return;
-    }
+    if (!saveToolsReady()) return;
+    if (!saveWritesAllowed()) return;
     if (file.size > MAX_PAK_INPUT) {
       setStatus("That Controller Pak bundle exceeds the 256 KiB limit.", "err");
       return;
@@ -1085,10 +1174,8 @@ globalThis.MDKRSaveUI = (() => {
 
   async function acceptImportFile(file) {
     if (!file) return;
-    if (released) {
-      setStatus("Reload the launcher before managing saves.", "err");
-      return;
-    }
+    if (!saveToolsReady()) return;
+    if (!saveWritesAllowed()) return;
     candidateFileName = file.name || "selected file";
     if (file.size > MAX_INPUT) {
       setStatus("That file exceeds the 64 KiB save-import limit.", "err");
@@ -1599,7 +1686,7 @@ globalThis.MDKRSaveUI = (() => {
     apply.id = "save-edit-apply";
     const span = document.createElement("span");
     span.textContent = "Apply changes";
-    apply.appendChild(span);
+    apply.replaceChildren(span);
     apply.addEventListener("click", async () => {
       const bytes = codec.raw();
       apply.disabled = true;
@@ -1623,6 +1710,7 @@ globalThis.MDKRSaveUI = (() => {
   }
 
   async function openEditor() {
+    if (!saveWritesAllowed()) return;
     try {
       const bytes = await repository.snapshot();
       if (bytes) codec.load(bytes);
@@ -1641,6 +1729,7 @@ globalThis.MDKRSaveUI = (() => {
   }
 
   async function openAutosaves() {
+    if (!saveWritesAllowed()) return;
     try {
       const automatic = await repository.autosaves();
       const previous = await repository.previous();
@@ -1706,6 +1795,7 @@ globalThis.MDKRSaveUI = (() => {
   }
 
   async function eraseSave() {
+    if (!saveWritesAllowed()) return;
     try {
       if (!await repository.hasAnyData()) {
         setStatus("There is no saved progress or recovery point stored for this site.");
@@ -1757,17 +1847,15 @@ globalThis.MDKRSaveUI = (() => {
 
     const drop = byId("save-drop");
     if (drop) {
-      drop.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          byId("import-save-input").click();
-        }
-      });
+      // A real button supplies Enter/Space activation, focus semantics, and a
+      // correct accessibility role without reproducing browser behavior in JS.
+      drop.addEventListener("click", () => byId("import-save-input").click());
       ["dragenter", "dragover"].forEach((name) =>
         drop.addEventListener(name, (event) => {
           event.preventDefault();
           event.stopPropagation();
-          drop.classList.add("over");
+          // A disabled button still receives drop events, so do not invite one.
+          if (!drop.disabled) drop.classList.add("over");
         }));
       ["dragleave", "dragend"].forEach((name) =>
         drop.addEventListener(name, () => drop.classList.remove("over")));
@@ -1805,6 +1893,9 @@ globalThis.MDKRSaveUI = (() => {
             ? "Stored progress contains corrupt blocks; raw export and recovery are available."
             : `Save tools ready — ${summary.sha256.slice(0, 12)}…`, mask ? "err" : "ok");
         }
+        // Whatever else is true, a spectator's most actionable fact is that it
+        // cannot write. Say that last so it is the line left on screen.
+        if (spectator()) setStatus(SPECTATOR_NOTICE, "err");
       } catch (error) {
         setStatus(
           "Save tools could not start. Import/export is unavailable: " +
@@ -1820,9 +1911,24 @@ globalThis.MDKRSaveUI = (() => {
     if (!readyPromise) return;
     try {
       await readyPromise;
-      await repository.release();
     } catch (_) {
-      // Engine boot will perform its own IDBFS mount and surface storage errors.
+      // Save tools never acquired the store, so there is nothing to hand over.
+      // Engine boot performs its own IDBFS mount and surfaces storage errors
+      // from there; refusing to boot over a module that owns nothing would be a
+      // second report of the same fact.
+      return;
+    }
+    // A failed final flush is a different claim: this module DID own /save and
+    // may still hold writes the engine is about to mount over. Say so here, and
+    // let it reach the caller's storage-failure branch rather than booting into
+    // a race.
+    try {
+      await repository.release();
+    } catch (error) {
+      setStatus(
+        "Browser storage did not accept the final save flush: " +
+        (error.message || error), "err");
+      throw error;
     }
   }
 
@@ -1842,6 +1948,10 @@ globalThis.MDKRSaveUI = (() => {
     init,
     release,
     resume,
+    // The shell owns the cross-tab verdict (one Web Lock per document); this
+    // module only consumes it. Safe to call before or after init().
+    setOwnership,
+    ownership: () => writeOwnership,
   };
   if (globalThis.__mdkrTestConfig) {
     // Runtime checks receive these through the same transaction and codec paths

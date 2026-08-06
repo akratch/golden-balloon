@@ -21,6 +21,19 @@
 
 const DKR_ROM_SIZE = 12 * 1024 * 1024; // 0xC00000 — every DKR revision
 
+// Complete canonical .z64 image identities for the two supported revisions.
+// CRC1/CRC2 identifies the cartridge revision; SHA-256 is the acceptance gate
+// that also catches stale, modified, or damaged bytes anywhere in the body.
+// MIRRORS dkr_rom_reference_sha256() in platform/rom_validation.c.
+const DKR_REFERENCE_SHA256 = Object.freeze({
+  "us.v80": "7de1a8fb2a9558cfc3d9ad4497df698c1e89cf7095ac1531557df2af40ba8bcf",
+  "pal.v80": "584d59412b3a8c675f5569516a0406128028929e31544490a4dbc3ab16a038b9",
+});
+
+function dkrReferenceSha256(build) {
+  return build ? (DKR_REFERENCE_SHA256[build] || null) : null;
+}
+
 // The five released revisions.
 //   name/country/revision/crc  <- the decomp's own src/hasm/header.s, which emits
 //                                 them per VERSION_*. Verified against all five
@@ -164,7 +177,7 @@ function dkrDescribeRom(id, name) {
       return `${p} has a ${id.revisionName} header (${id.decompBuild}) but its CRC1/CRC2 ` +
              `(0x${hex8(id.crc1)} / 0x${hex8(id.crc2)}) do not match that revision's reference ` +
              `pair (0x${hex8(id.refCrc1)} / 0x${hex8(id.refCrc2)}) - a modified or imperfect ` +
-             `dump. Continuing anyway.`;
+             `dump. Use a clean reference image, or enable the explicit modified-ROM developer override.`;
     case "other-revision":
       return `${p} is the ${id.revisionName} release of Diddy Kong Racing (decomp build ` +
              `${id.decompBuild}), which this build does not support: it is compiled for ` +
@@ -180,43 +193,65 @@ function dkrDescribeRom(id, name) {
   }
 }
 
-// The whole gate, in the same order as platform/rom_io.c platformInitRom():
-// size -> byte order (converted in place) -> revision.
+// The synchronous identity gate: size -> byte order (converted in place) ->
+// revision. mdkr64-shell.js immediately follows a successful result with the
+// complete Web Crypto SHA-256 gate above the persistence/Play boundary.
 //
-// Returns { error, warning, order, id }. `error` non-null means refuse; the
-// caller must not boot. `warning` non-null means accept and say so.
+// Returns { error, order, id }. `error` non-null means refuse; the caller must
+// not boot.
+//
+// The three pre-identification refusals below mirror the equivalent branches of
+// dkr_rom_validate_image() in platform/rom_validation.c: same split at 1 MiB,
+// same sentence, same Oxford comma, and the picked file is named in every one.
+// A player who hits the same wall on the desktop build and in the browser must
+// not be told two different things. Only the browser-only magic-byte clause is
+// additional, and it is appended as its own sentence so the shared text stays
+// recognisable side by side.
 function dkrValidateRom(bytes, name) {
   const p = name || "that file";
   if (!bytes || bytes.length !== DKR_ROM_SIZE) {
-    const mb = bytes ? (bytes.length / 1048576).toFixed(1) : 0;
+    const size = bytes ? bytes.length : 0;
+    if (size < 1024 * 1024) {
+      return {
+        error: `${p} is only ${size} bytes; a Diddy Kong Racing ROM must be exactly ` +
+               `12 MB (.z64, .v64, or .n64). The file is truncated or is not a ` +
+               `cartridge image.`,
+        order: null, id: null,
+      };
+    }
     return {
-      error: `That file is ${mb} MB; a Diddy Kong Racing ROM must be exactly 12 MB ` +
-             `(.z64, .v64 or .n64). Wrong game, headered dump, or truncated file.`,
-      warning: null, order: null, id: null,
+      error: `${p} is ${(size / 1048576).toFixed(1)} MB; a Diddy Kong Racing ROM must ` +
+             `be exactly 12 MB (.z64, .v64, or .n64). Choose an unheadered US 1.1 or ` +
+             `European 1.1 dump.`,
+      order: null, id: null,
     };
   }
   const order = dkrNormalizeByteOrder(bytes);
   if (order === null) {
     const m = [0, 1, 2, 3].map((i) => bytes[i].toString(16).padStart(2, "0")).join(" ");
     return {
-      error: `${p} is not an N64 ROM - its first four bytes are ${m}, which is none of ` +
-             `.z64 (80 37 12 40), .v64 (37 80 40 12) or .n64 (40 12 37 80).`,
-      warning: null, order: null, id: null,
+      error: `${p} is 12 MB but is not an N64 ROM. Choose an unheadered .z64, .v64, ` +
+             `or .n64 image. Its first four bytes are ${m}, which match none of ` +
+             `.z64 (80 37 12 40), .v64 (37 80 40 12), or .n64 (40 12 37 80).`,
+      order: null, id: null,
     };
   }
   const id = dkrIdentifyRom(bytes);
   const msg = dkrDescribeRom(id, p);
   if (id.verdict !== "supported") {
-    return { error: msg, warning: null, order, id };
+    return { error: msg, order, id };
   }
-  return { error: null, warning: id.matchedByCrc ? null : msg, order, id };
+  return id.matchedByCrc
+    ? { error: null, order, id }
+    : { error: msg, order, id };
 }
 
 // Exported for tests/check_rom_revision.py, which runs this file under node and
 // compares its verdicts against the native binary's. Harmless in a browser.
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    DKR_REVISIONS, DKR_ROM_SIZE, dkrSupportedList,
+    DKR_REVISIONS, DKR_ROM_SIZE, DKR_REFERENCE_SHA256, dkrReferenceSha256,
+    dkrSupportedList,
     dkrNormalizeByteOrder, dkrIdentifyRom, dkrDescribeRom, dkrValidateRom,
   };
 }
