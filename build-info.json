@@ -1,10 +1,10 @@
 {
   "project": "Golden Balloon",
-  "version": "1.1.0",
-  "source_commit": "c81337e9b9fbb97e4126ea6275f2d1e2b45ed126",
-  "source_commit_short": "c81337e",
+  "version": "1.2.0",
+  "source_commit": "84b1c2bbb104999cffb89163c0451cf06d51a007",
+  "source_commit_short": "84b1c2b",
   "source_dirty": false,
-  "built_utc": "2026-08-07T21:26:25Z",
+  "built_utc": "2026-08-10T16:12:34Z",
   "emcc": "emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 4.0.10 (b7dc6e5747465580df5984e723b9d1f10d8e804b)",
-  "wasm_bytes": 2112481
+  "wasm_bytes": 2294415
 }
