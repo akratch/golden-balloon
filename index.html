@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-build-version="1.2.0">
+<html lang="en" data-build-version="1.8.0" data-build-stamp="2b69e748">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -18,13 +18,14 @@
 <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
 <link rel="icon" type="image/png" sizes="256x256" href="assets/favicon.png">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
-<link rel="manifest" href="manifest.webmanifest?v=c5a169a">
+<link rel="manifest" href="manifest.webmanifest?v=2b69e748">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Golden Balloon">
 <link rel="preload" as="image" href="assets/hero.jpg" fetchpriority="high">
-<link rel="stylesheet" href="style.css?v=c5a169a">
+<link rel="stylesheet" href="style.css?v=2b69e748">
+<link rel="stylesheet" href="input/touch-surface.css?v=2b69e748">
 </head>
 <body>
 <a class="skip-link" href="#gate">Skip to launcher</a>
@@ -151,10 +152,12 @@
 
             <div class="actions">
               <button id="play" class="btn btn-primary" type="button" disabled>
-                <span>▶ Play</span>
+                <span>▶ Play here</span>
               </button>
               <button id="forget" class="btn btn-ghost" type="button" hidden>Forget stored ROM</button>
             </div>
+            <p class="fine">Play here supports solo, ordinary split-screen,
+              keyboard, touch controls and mixed gamepads.</p>
 
             <p class="fine">
               Other revisions (US 1.0, EU 1.0, Japan) are recognised and named back to
@@ -215,9 +218,10 @@
                     survive a reload. <em>Stored data</em> (step&nbsp;04) erases
                     them if you want a clean slate.</li>
                   <li>Needs <strong>WebGPU</strong>. Current Chrome or Edge is the
-                    qualified path. Other browsers are capability-detected and
-                    receive an explicit failure instead of a black screen; there
-                    is no WebGL fallback.</li>
+                    qualified path; a WebGPU-enabled Firefox or Safari can also
+                    work. Every browser is capability-detected and receives an
+                    explicit failure instead of a black screen; there is no
+                    WebGL fallback.</li>
                   <li><strong>Adventure, Tracks, Time Trial, bosses, trophy series,
                     and challenge modes</strong> are playable.</li>
                   <li>Two-, three-, and four-player split-screen work with
@@ -342,6 +346,7 @@
   <div id="save-dialog-actions" class="actions"></div>
 </dialog>
 
+
 <dialog id="forget-rom-dialog" class="confirm-dialog"
         aria-labelledby="forget-rom-title">
   <h2 id="forget-rom-title">Forget stored ROM?</h2>
@@ -374,8 +379,9 @@
     <button class="touch-pause" type="button" data-touch-button="4096"
             aria-label="Pause or start"><span aria-hidden="true">❚❚</span></button>
 
-    <div id="touch-stick" class="touch-stick" role="group"
-         aria-label="Analog steering stick">
+    <div id="touch-stick" class="touch-stick" role="group" tabindex="0"
+         aria-label="Analog steering stick. Use arrow keys or W A S D to steer"
+         aria-valuetext="Centered">
       <span class="touch-stick-ring" aria-hidden="true"></span>
       <span id="touch-stick-knob" class="touch-stick-knob" aria-hidden="true"></span>
       <span class="touch-stick-label" aria-hidden="true">Steer</span>
@@ -426,8 +432,9 @@
 
 <!-- rom-id.js MUST come first: the shell calls dkrValidateRom() from it. It is the
      browser mirror of platform/rom_id.c (revision table + byte-order fix-up). -->
-<script src="rom-id.js?v=c5a169a"></script>
-<script src="mdkr-save-ui.js?v=c5a169a"></script>
-<script src="mdkr64-shell.js?v=c5a169a"></script>
+<script src="rom-id.js?v=2b69e748"></script>
+<script src="mdkr-save-ui.js?v=2b69e748"></script>
+<script src="input/touch-surface.js?v=2b69e748"></script>
+<script src="mdkr64-shell.js?v=2b69e748"></script>
 </body>
 </html>
